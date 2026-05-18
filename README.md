@@ -1,5 +1,10 @@
 # Mochi
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Build server bundle](https://github.com/DevZonayed/Mochi/actions/workflows/build.yml/badge.svg)](https://github.com/DevZonayed/Mochi/actions/workflows/build.yml)
+[![CodeQL](https://github.com/DevZonayed/Mochi/actions/workflows/codeql.yml/badge.svg)](https://github.com/DevZonayed/Mochi/actions/workflows/codeql.yml)
+[![GitHub Repo stars](https://img.shields.io/github/stars/DevZonayed/Mochi?style=social)](https://github.com/DevZonayed/Mochi/stargazers)
+
 > Browser companion for AI assistants. Browser automation MCP + persistent
 > project memory + in-page hint messaging, all in one Claude Code plugin.
 
@@ -14,7 +19,8 @@ cached selectors — no re-discovery, no re-screenshotting. If a selector breaks
 and updates the cache.
 
 ```
-                 selector cache + workflow store (SQLite)
+                 selector cache + workflow store
+                  (file-based, <project>/.continuum/)
                               ▲
 AI client (Claude Code / Codex / Cursor)
         │  stdio (MCP)                 ▲
@@ -28,24 +34,11 @@ AI client (Claude Code / Codex / Cursor)
               session = { tab group, primary tab, tab set, CDP }
 ```
 
-```
-AI client (Claude Code / Cursor / …)
-        │  stdio (MCP)
-        ▼
-   server/  ──── auto-launches Chrome ────▶  Chrome
-        │  WebSocket                              │
-        ▼                                         ▼
- extension/ background.js  ◀──────────────  manifest V3 extension
-                       │
-                       ▼
-              session = { tab group, primary tab, tab set }
-```
-
 ## Layout
 
 | Directory     | What it is                                                                       |
 | ------------- | -------------------------------------------------------------------------------- |
-| `server/`     | Node MCP server. WS server (port 9009) + SQLite memory + workflow replay engine. |
+| `server/`     | Node MCP server. WS server (port 9009) + file-based memory + workflow replay engine. |
 | `extension/`  | Chrome MV3 extension. Owns the tab group, CDP attachments, and DOM helpers.      |
 | `mcp/`        | Reference clone of upstream Browser MCP (not used; archival).                    |
 
@@ -244,7 +237,8 @@ browser_click {ref, intent:"…"}    ← intent caches the selector
 
 ## Memory model
 
-Two layers, one SQLite file per project at `<root>/.super-tester/memory.db`.
+Two layers, stored as plain JSON files under `<project>/.continuum/` (no
+database, no native bindings).
 
 ### 1) Selector cache — keyed by `(origin, intent)`
 
@@ -357,8 +351,8 @@ Extension holds Map<clientId, Session> — one tab group per Claude session.
 ```
 
 The selector cache and workflow store are shared across sessions
-(per-origin in SQLite), so a workflow recorded in Session A can be replayed
-from Session B without re-learning anything.
+(per-origin, in `.continuum/`), so a workflow recorded in Session A can be
+replayed from Session B without re-learning anything.
 
 ## Claude Code shortcuts
 
@@ -408,10 +402,9 @@ its own tab group.
 | `SUPER_TESTER_CHROME_PATH`         | platform-detected                | Override Chrome binary path.                              |
 | `SUPER_TESTER_EXTENSION_PATH`      | unset                            | If set, Chrome launches with `--load-extension=<path>`.   |
 | `SUPER_TESTER_PROFILE_DIR`         | `~/.super-tester/super-tester-profile` | Dedicated `--user-data-dir`.                        |
-| `SUPER_TESTER_MEMORY_BACKEND`      | SQLite when available            | Set `memory` to force non-persistent in-memory selector/workflow storage. The server also falls back to this if `better-sqlite3` cannot load. |
 | `SUPER_TESTER_EXTENSION_WAIT_MS`   | `20000`                          | How long to wait for the extension to connect on cold start. |
-| `SUPER_TESTER_DB_PATH`             | `<project>/.super-tester/memory.db` | Override the SQLite file path (selectors + workflows). |
-| `SUPER_TESTER_PROJECT_DIR`         | `process.cwd()`                   | Where to start looking for a project root (`.git` / `package.json`) for the per-project DB. |
+| `SUPER_TESTER_DATA_DIR`            | `<project>/.continuum/`          | Override where selector cache and workflows are stored. |
+| `SUPER_TESTER_PROJECT_DIR`         | `process.cwd()`                  | Where to start looking for a project root (`.git` / `package.json`) for the per-project data dir. |
 
 ## Caveats
 
@@ -433,3 +426,16 @@ its own tab group.
 | `element has zero size` from `browser_screenshot`          | The `elementRef` is hidden / `display:none`. Snapshot first to confirm visibility.                                                          |
 | Chrome opens but with the wrong profile                    | Set `SUPER_TESTER_PROFILE_DIR` to a clean directory.                                                                                        |
 | Server logs `[ws] error: EADDRINUSE`                       | Another instance is running on port 9009. Kill it or change `SUPER_TESTER_WS_PORT`.                                                         |
+
+## Contributing
+
+Issues, ideas, and PRs welcome. A few pointers:
+
+- **Bug reports / feature requests** — use the [issue templates](https://github.com/DevZonayed/Mochi/issues/new/choose).
+- **Open-ended questions or ideas** — start a [discussion](https://github.com/DevZonayed/Mochi/discussions) instead of an issue.
+- **Pull requests** — keep them focused (one concern per PR). The PR template prompts for context. Don't hand-edit `server/dist/` — it's auto-rebuilt by CI from `server/src/`.
+- **Security issues** — please **don't** open a public issue. See [SECURITY.md](SECURITY.md) for the private disclosure process.
+
+## License
+
+[MIT](LICENSE) © Jonayed Ahamed
