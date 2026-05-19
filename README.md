@@ -136,7 +136,7 @@ at the same time — pick one.
 
 ## Tools (MCP)
 
-39 tools, grouped by purpose.
+41 tools, grouped by purpose.
 
 ### Session + tabs
 
@@ -180,6 +180,20 @@ at the same time — pick one.
 | Tool | What it does |
 |---|---|
 | `browser_assert` | Verify `url-contains`, `url-equals`, `title-contains`, `element-exists`, `element-missing`, `text-contains`, `text-equals`. Returns `{ok, got}`. |
+
+### File uploads
+
+| Tool | What it does |
+|---|---|
+| `browser_upload_stage` | Stage a file into the per-project library at `.continuum/uploads/`. Accepts `path`, https `url`, `dataUrl`, or `base64`. Returns a stable `stashId` (sha256-based, idempotent) reusable across many uploads. |
+| `browser_upload_file` | Attach a file to a page target via a strategy chain: `direct` (`DOM.setFileInputFiles`) → `intercept` (file-chooser dialog) → `drop` (synthesized `DataTransfer` + `DragEvent`) → `paste` (synthesized `ClipboardEvent`). Bypasses the native OS file picker entirely. Target by `selector`, `ref`, `trigger`, or `auto: { near }`. Smart-wait confirms upload (preview thumbnail / 2xx upload response / custom `successSelector`). |
+
+Sources can be inlined into `browser_upload_file` or pre-staged with
+`browser_upload_stage`; staging dedupes by sha256, so the same logo across
+ten sites is fetched/decoded once and reused. Frame-traversal handles
+same-origin iframes automatically. See
+[`docs/superpowers/specs/2026-05-19-browser-file-upload-design.md`](docs/superpowers/specs/2026-05-19-browser-file-upload-design.md)
+for the full design.
 
 ### Memory: selector cache (per origin)
 
