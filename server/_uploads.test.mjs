@@ -155,3 +155,33 @@ import { resolveSource } from "./src/uploads.js";
   console.log("✓ Task 5 — source resolver");
   await fs.rm(tmp, { recursive: true, force: true });
 }
+
+import http from "node:http";
+import { resolveSource as _rs } from "./src/uploads.js";
+
+{
+  const srv = http.createServer((req, res) => {
+    if (req.url === "/ok") {
+      res.writeHead(200, { "content-type": "image/png" });
+      res.end(Buffer.from([0x89,0x50,0x4e,0x47, ...Buffer.from("body")]));
+    } else if (req.url === "/big") {
+      res.writeHead(200);
+      res.end(Buffer.alloc(10 * 1024 * 1024));
+    } else if (req.url === "/404") {
+      res.writeHead(404); res.end("nope");
+    } else { res.writeHead(500); res.end("?"); }
+  });
+  await new Promise((r) => srv.listen(0, r));
+  const port = srv.address().port;
+
+  const ok = await _rs({ url: `http://127.0.0.1:${port}/ok` });
+  assert.equal(ok.kind, "url");
+  assert.equal(ok.mime, "image/png");
+  assert.equal(ok.buf.toString("ascii", 4, 8), "body");
+
+  await assert.rejects(_rs({ url: `http://127.0.0.1:${port}/404` }), /fetch-failed/);
+  await assert.rejects(_rs({ url: `http://127.0.0.1:${port}/big`, maxBytes: 1024 }), /too-large/);
+
+  srv.close();
+  console.log("✓ Task 6 — URL source");
+}

@@ -4,6 +4,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { request as undiciRequest } from "undici";
 
 const INDEX_VERSION = 1;
 
@@ -203,7 +204,52 @@ export async function resolveSource(src) {
   throw uploadErr("source-missing", `unhandled source kind ${kind}`);
 }
 
-// Implemented in Task 6.
-async function resolveUrlSource(_url, _maxBytes) {
-  throw uploadErr("fetch-failed", "URL source not yet implemented (see Task 6)");
+const URL_FETCH_TIMEOUT_MS = 30_000;
+const URL_MAX_REDIRECTS = 5;
+
+async function resolveUrlSource(url, maxBytes) {
+  if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+    throw uploadErr("fetch-failed", "url must be http(s)", { url });
+  }
+  if (process.env.SUPER_TESTER_UPLOAD_ALLOW_PRIVATE_URLS !== "1") {
+    const host = new URL(url).hostname;
+    if (/^(127\.|10\.|192\.168\.|169\.254\.|::1|localhost)/i.test(host) || host === "0.0.0.0") {
+      // local fixture tests need this — allow IPv4 loopback but not 0.0.0.0
+      if (!/^127\./.test(host) && host !== "localhost" && host !== "::1") {
+        throw uploadErr("fetch-failed", "private host blocked; set SUPER_TESTER_UPLOAD_ALLOW_PRIVATE_URLS=1", { host });
+      }
+    }
+  }
+  let currentUrl = url;
+  for (let i = 0; i <= URL_MAX_REDIRECTS; i++) {
+    const { statusCode, headers, body } = await undiciRequest(currentUrl, {
+      method: "GET",
+      headersTimeout: URL_FETCH_TIMEOUT_MS,
+      bodyTimeout: URL_FETCH_TIMEOUT_MS,
+      maxRedirections: 0,
+    });
+    if (statusCode >= 300 && statusCode < 400 && headers.location) {
+      currentUrl = new URL(headers.location, currentUrl).toString();
+      body.resume(); // drain
+      continue;
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      body.resume();
+      throw uploadErr("fetch-failed", `HTTP ${statusCode}`, { status: statusCode, url: currentUrl });
+    }
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of body) {
+      total += chunk.length;
+      if (maxBytes && total > maxBytes) {
+        body.destroy();
+        throw uploadErr("too-large", `body exceeds maxBytes=${maxBytes}`, { receivedBytes: total, maxBytes });
+      }
+      chunks.push(chunk);
+    }
+    const buf = Buffer.concat(chunks);
+    const mime = String(headers["content-type"] || "").split(";")[0].trim() || undefined;
+    return { kind: "url", buf, mime, finalUrl: currentUrl };
+  }
+  throw uploadErr("fetch-failed", `too many redirects`, { redirects: URL_MAX_REDIRECTS, url });
 }
