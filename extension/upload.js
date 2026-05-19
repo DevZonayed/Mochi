@@ -87,8 +87,58 @@ export async function handleUploadFile(params, clientId) {
 }
 
 async function runStrategy(name, ctx) {
-  // Stubs — implemented in Tasks 14-17.
-  return { ok: false, reason: `strategy "${name}" not implemented yet` };
+  if (name === "direct")    return strategyDirect(ctx);
+  if (name === "intercept") return strategyIntercept(ctx);
+  if (name === "drop")      return strategyDrop(ctx);
+  if (name === "paste")     return strategyPaste(ctx);
+  return { ok: false, reason: `unknown strategy "${name}"` };
+}
+
+async function strategyDirect(ctx) {
+  let resolved;
+  try { resolved = await resolveTargetNode(ctx, ctx.target); }
+  catch (e) { return { ok: false, reason: e.message }; }
+  if (resolved.isTrigger) {
+    return { ok: false, reason: "target is a trigger element, not an <input type=file>" };
+  }
+
+  // Verify the resolved node is <input type="file"> before handing paths to
+  // DOM.setFileInputFiles — Chrome rejects the call on any other element, and
+  // we'd rather return a clear reason than a CDP error.
+  const desc = await cdp(ctx.tabId, "DOM.describeNode", { nodeId: resolved.nodeId });
+  const node = desc.node || {};
+  const tag = (node.localName || node.nodeName || "").toLowerCase();
+  const attrs = node.attributes || [];
+  let type = "";
+  for (let i = 0; i < attrs.length; i += 2) {
+    if ((attrs[i] || "").toLowerCase() === "type") { type = (attrs[i + 1] || "").toLowerCase(); break; }
+  }
+  if (tag !== "input" || type !== "file") {
+    return { ok: false, reason: `target is <${tag} type="${type}">, not <input type="file">` };
+  }
+
+  await cdp(ctx.tabId, "DOM.setFileInputFiles", { nodeId: resolved.nodeId, files: ctx.filePaths });
+  await dispatchPostEvents(ctx, resolved);
+  return {
+    ok: true,
+    target: { resolved: `<${tag} type="${type}">`, frameId: resolved.frameId, nodeId: resolved.nodeId },
+  };
+}
+
+async function dispatchPostEvents(ctx, resolved) {
+  if (!ctx.dispatchEvents || !ctx.dispatchEvents.length) return;
+  const objectIdResp = await cdp(ctx.tabId, "DOM.resolveNode", { nodeId: resolved.nodeId });
+  const objectId = objectIdResp.object.objectId;
+  for (const ev of ctx.dispatchEvents) {
+    // ev is interpolated into a function source; keep the allow-list tight to
+    // avoid injection via crafted dispatchEvents values.
+    const safe = String(ev).replace(/[^a-zA-Z0-9_-]/g, "");
+    if (!safe) continue;
+    await cdp(ctx.tabId, "Runtime.callFunctionOn", {
+      objectId,
+      functionDeclaration: `function(){ this.dispatchEvent(new Event('${safe}', { bubbles: true })); }`,
+    });
+  }
 }
 
 async function smartWait(_ctx) {
