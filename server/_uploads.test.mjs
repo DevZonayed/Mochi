@@ -112,3 +112,46 @@ import { stageBuffer } from "./src/uploads.js";
   console.log("✓ Task 4 — stage from buffer + dedup");
   await fs.rm(tmp, { recursive: true, force: true });
 }
+
+import { resolveSource } from "./src/uploads.js";
+
+{
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-uploads-test-"));
+  process.env.MOCHI_PROJECT_DIR = tmp;
+  await initUploads();
+
+  // exclusivity
+  await assert.rejects(resolveSource({}), /source-missing/);
+  await assert.rejects(resolveSource({ path: "/x", base64: "y" }), /source-conflict/);
+
+  // base64 needs to actually be a buffer
+  const r1 = await resolveSource({ base64: Buffer.from("hello-png-body").toString("base64") });
+  assert.equal(r1.kind, "base64");
+  assert.equal(r1.buf.toString(), "hello-png-body");
+
+  // data URL
+  const r2 = await resolveSource({ dataUrl: "data:image/png;base64," + Buffer.from([0x89,0x50,0x4e,0x47]).toString("base64") });
+  assert.equal(r2.kind, "dataUrl");
+  assert.equal(r2.mime, "image/png");
+  assert.equal(r2.buf.length, 4);
+
+  // path
+  const onDisk = path.join(tmp, "sample.bin");
+  await fs.writeFile(onDisk, "from-disk");
+  const r3 = await resolveSource({ path: onDisk });
+  assert.equal(r3.kind, "path");
+  assert.equal(r3.buf.toString(), "from-disk");
+
+  // stashId
+  const staged = await stageBuffer(Buffer.from("stash-bytes"), { source: { kind: "test" } });
+  const r4 = await resolveSource({ stashId: staged.stashId });
+  assert.equal(r4.kind, "stash");
+  assert.equal(r4.buf.toString(), "stash-bytes");
+  assert.equal(r4.entry.stashId, staged.stashId);
+
+  // stash-not-found
+  await assert.rejects(resolveSource({ stashId: "u_deadbeef" }), /stash-not-found/);
+
+  console.log("✓ Task 5 — source resolver");
+  await fs.rm(tmp, { recursive: true, force: true });
+}

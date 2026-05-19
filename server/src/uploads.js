@@ -146,7 +146,64 @@ function entryToResult(e) {
 }
 
 export function uploadErr(code, message, details) {
-  const e = new Error(message);
+  const e = new Error(`${code}: ${message}`);
   e.uploadError = { code, message, details };
   return e;
+}
+
+export async function resolveSource(src) {
+  if (!src || typeof src !== "object") throw uploadErr("source-missing", "source object required");
+  const kinds = ["path", "url", "dataUrl", "base64", "bytes", "stashId"];
+  const present = kinds.filter((k) => src[k] !== undefined && src[k] !== null && src[k] !== "");
+  if (present.length === 0) throw uploadErr("source-missing", "specify one of: " + kinds.join(", "));
+  if (present.length > 1) throw uploadErr("source-conflict", "exactly one of: " + kinds.join(", "), { present });
+  const kind = present[0];
+
+  if (kind === "path") {
+    const p = path.resolve(src.path);
+    let buf;
+    try { buf = await fs.readFile(p); }
+    catch (e) { throw uploadErr("decode-failed", `cannot read path: ${e.message}`, { path: p }); }
+    return { kind: "path", buf, mime: undefined, originalPath: p };
+  }
+
+  if (kind === "base64" || kind === "bytes") {
+    let buf;
+    try { buf = Buffer.from(src[kind], "base64"); }
+    catch (e) { throw uploadErr("decode-failed", "invalid base64", { error: e.message }); }
+    if (!buf.length) throw uploadErr("decode-failed", "base64 decoded to zero bytes");
+    return { kind: "base64", buf, mime: src.mime };
+  }
+
+  if (kind === "dataUrl") {
+    const m = /^data:([^;,]+)?(?:;([^,]+))?,(.+)$/s.exec(src.dataUrl);
+    if (!m) throw uploadErr("decode-failed", "malformed data URL");
+    const mime = m[1] || "application/octet-stream";
+    const isB64 = (m[2] || "").includes("base64");
+    const body = m[3];
+    const buf = isB64 ? Buffer.from(body, "base64") : Buffer.from(decodeURIComponent(body));
+    if (!buf.length) throw uploadErr("decode-failed", "data URL body empty");
+    return { kind: "dataUrl", buf, mime };
+  }
+
+  if (kind === "stashId") {
+    const idx = await readIndex();
+    const entry = idx.entries.find((e) => e.stashId === src.stashId);
+    if (!entry) throw uploadErr("stash-not-found", `no stash entry for ${src.stashId}`);
+    const p = path.join(uploadsDir(), `${entry.sha256}.${entry.ext}`);
+    let buf;
+    try { buf = await fs.readFile(p); }
+    catch { throw uploadErr("stash-not-found", `blob missing on disk for ${src.stashId}`, { path: p }); }
+    return { kind: "stash", buf, mime: entry.mime, entry };
+  }
+
+  if (kind === "url") {
+    return resolveUrlSource(src.url, src.maxBytes);
+  }
+  throw uploadErr("source-missing", `unhandled source kind ${kind}`);
+}
+
+// Implemented in Task 6.
+async function resolveUrlSource(_url, _maxBytes) {
+  throw uploadErr("fetch-failed", "URL source not yet implemented (see Task 6)");
 }
