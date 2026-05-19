@@ -116,6 +116,10 @@ export async function stageBuffer(buf, { source, mime, name, keep = "session", s
   const existing = idx.entries.find((e) => e.sha256 === sha);
   if (existing) {
     existing.lastUsedAt = new Date().toISOString();
+    if (keep === "persistent") {
+      existing.keep = "persistent";
+      existing.sessionId = sessionId; // promote ownership (typically null)
+    }
     await writeIndex(idx);
     return { ...entryToResult(existing), dedupedFrom: existing.stashId };
   }
@@ -290,4 +294,37 @@ function sourceDescriptor(rawSource, resolved) {
   if (resolved.kind === "base64")  return { kind: "base64" };
   if (resolved.kind === "stash")   return { kind: "stash",   stashId: resolved.entry.stashId };
   return { kind: "unknown" };
+}
+
+export async function gcSession(sessionId) {
+  const idx = await readIndex();
+  const kept = [];
+  const removed = [];
+  for (const e of idx.entries) {
+    if (e.sessionId === sessionId && e.keep === "session") {
+      removed.push(e.stashId);
+      continue;
+    }
+    kept.push(e);
+  }
+  if (!removed.length) return removed;
+  // figure out which sha256s are no longer referenced and unlink their blobs
+  const keptShas = new Set(kept.map((e) => e.sha256));
+  const removedShas = new Set(idx.entries.filter((e) => removed.includes(e.stashId)).map((e) => e.sha256));
+  idx.entries = kept;
+  await writeIndex(idx);
+  for (const sha of removedShas) {
+    if (keptShas.has(sha)) continue;
+    const e = idx.entries.find((x) => x.sha256 === sha) || null;
+    const ext = e?.ext || (await guessExtFromDisk(sha));
+    if (!ext) continue;
+    try { await fs.unlink(path.join(uploadsDir(), `${sha}.${ext}`)); } catch {}
+  }
+  return removed;
+}
+
+async function guessExtFromDisk(sha) {
+  const files = await fs.readdir(uploadsDir());
+  const match = files.find((f) => f.startsWith(sha + "."));
+  return match ? match.split(".").pop() : null;
 }

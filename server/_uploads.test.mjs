@@ -210,3 +210,45 @@ import { stage } from "./src/uploads.js";
   console.log("✓ Task 7 — stage() top-level");
   await fs.rm(tmp, { recursive: true, force: true });
 }
+
+import { gcSession } from "./src/uploads.js";
+
+{
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-uploads-test-"));
+  process.env.MOCHI_PROJECT_DIR = tmp;
+  await initUploads();
+
+  const a = await stage({ source: { base64: Buffer.from("aaaa").toString("base64") }, keep: "session",    sessionId: "S1" });
+  const b = await stage({ source: { base64: Buffer.from("bbbb").toString("base64") }, keep: "session",    sessionId: "S2" });
+  const c = await stage({ source: { base64: Buffer.from("cccc").toString("base64") }, keep: "persistent", sessionId: "S1" });
+
+  // share a sha between session-S2 and persistent — should NOT be unlinked when S2 gc's
+  const d = await stage({ source: { base64: Buffer.from("dddd").toString("base64") }, keep: "session",    sessionId: "S2" });
+  const dPersistent = await stage({ source: { base64: Buffer.from("dddd").toString("base64") }, keep: "persistent", sessionId: null });
+  assert.equal(d.stashId, dPersistent.stashId);
+
+  const removed = await gcSession("S1");
+  // S1 had `a` session-only → should be gone; `c` persistent → kept
+  const idx1 = await readIndex();
+  assert.ok(!idx1.entries.find((e) => e.stashId === a.stashId));
+  assert.ok( idx1.entries.find((e) => e.stashId === c.stashId));
+  assert.ok( idx1.entries.find((e) => e.stashId === b.stashId));
+  assert.deepEqual(removed.sort(), [a.stashId].sort());
+
+  // file for `a` should be gone
+  await assert.rejects(fs.access(a.path));
+  // file for `c` should still be there
+  await fs.access(c.path);
+
+  // gc S2 — `b` (only session) should be removed; `d` (also referenced as persistent) keeps blob
+  const removed2 = await gcSession("S2");
+  const idx2 = await readIndex();
+  assert.ok(!idx2.entries.find((e) => e.stashId === b.stashId));
+  assert.ok(!idx2.entries.find((e) => e.sessionId === "S2"));
+  // persistent twin survives
+  assert.ok(idx2.entries.find((e) => e.stashId === dPersistent.stashId && e.keep === "persistent"));
+  await fs.access(dPersistent.path);
+
+  console.log("✓ Task 8 — gcSession");
+  await fs.rm(tmp, { recursive: true, force: true });
+}
