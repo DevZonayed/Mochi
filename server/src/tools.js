@@ -560,6 +560,54 @@ export const tools = [
       required: ["source"],
     },
   },
+  {
+    name: "browser_upload_file",
+    description:
+      "Attach a file to a target on the page. Bypasses the native OS file picker via a strategy chain " +
+      "(direct DOM.setFileInputFiles → file-chooser intercept → drag-drop synthesis → paste synthesis). " +
+      "Source can be a stashId from browser_upload_stage OR inline (path/url/dataUrl/base64). " +
+      "Target can be a CSS selector, accessibility ref, visible trigger element, or auto-detected from a nearby anchor.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number" },
+
+        stashId: { type: "string" },
+        path:    { type: "string" },
+        url:     { type: "string" },
+        dataUrl: { type: "string" },
+        base64:  { type: "string" },
+        bytes:   { type: "string", description: "Alias for `base64`." },
+        mime:    { type: "string" },
+        name:    { type: "string" },
+        files:   { type: "array", description: "For multi-file inputs: array of source descriptors (each like the inline fields above OR { stashId })." },
+
+        selector: { type: "string" },
+        ref:      { type: "string" },
+        trigger:  { type: "object", properties: { selector: { type: "string" }, ref: { type: "string" } } },
+        auto:     { type: "object", properties: { near: { type: "string", description: "ref or selector" } } },
+
+        strategies: {
+          type: "array",
+          items: { type: "string", enum: ["direct", "intercept", "drop", "paste"] },
+          default: ["direct", "intercept", "drop", "paste"],
+        },
+        frames:         { type: "string", description: '"all" | "top" | <frameId>', default: "all" },
+        dispatchEvents: { type: "array", items: { type: "string" }, default: ["change", "input"] },
+
+        waitFor: {
+          type: "object",
+          properties: {
+            mode:            { type: "string", enum: ["smart", "explicit", "none"], default: "smart" },
+            timeoutMs:       { type: "number", default: 15000 },
+            previewSelector: { type: "string" },
+            networkPattern:  { type: "string", description: "JS regex source" },
+            successSelector: { type: "string" },
+          },
+        },
+      },
+    },
+  },
 ];
 
 const TOOL_TO_WS_TYPE = {
@@ -588,6 +636,7 @@ const TOOL_TO_WS_TYPE = {
   browser_evaluate: "evaluate",
   browser_console_messages: "console_messages",
   browser_network_requests: "network_requests",
+  browser_upload_file: "upload_file",
 };
 
 // ---------------- top-level dispatch ----------------
