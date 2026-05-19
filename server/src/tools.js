@@ -664,7 +664,88 @@ export async function handleToolCall(bridge, params) {
     case "browser_upload_stage":      return jsonResult(await toolUploadStage(args));
   }
 
+  if (name === "browser_upload_file") {
+    return jsonResult(await toolUploadFile(bridge, args));
+  }
   return jsonResult(await runWireTool(bridge, name, args));
+}
+
+async function toolUploadFile(bridge, args = {}) {
+  try {
+    const fileSources = collectFileSources(args);
+    const resolved = await Promise.all(fileSources.map(async (src) => {
+      const r = await resolveOrStage(src);
+      return r;
+    }));
+
+    const target = pickTarget(args);
+    if (!target) throw uploadErr("source-missing", "specify one target: selector | ref | trigger | auto");
+
+    const strategies = Array.isArray(args.strategies) && args.strategies.length
+      ? args.strategies
+      : ["direct", "intercept", "drop", "paste"];
+
+    const needsBytes = strategies.includes("drop") || strategies.includes("paste");
+    const filePaths = resolved.map((r) => r.path);
+    const fileBytes = needsBytes
+      ? await Promise.all(resolved.map(async (r) => {
+          const buf = await fsp.readFile(r.path);
+          return { name: r.name, mime: r.mime, base64: buf.toString("base64") };
+        }))
+      : undefined;
+
+    const params = {
+      filePaths,
+      ...(fileBytes ? { fileBytes } : {}),
+      target,
+      strategies,
+      frames:         args.frames ?? "all",
+      dispatchEvents: args.dispatchEvents ?? ["change", "input"],
+      waitFor:        args.waitFor ?? { mode: "smart", timeoutMs: 15000 },
+    };
+
+    if (args.tabId != null) params.tabId = args.tabId;
+    const result = await bridge.send("upload_file", params);
+    return { ok: true, ...result, files: resolved.map((r) => ({ name: r.name, mime: r.mime, sizeBytes: r.sizeBytes, stashId: r.stashId })) };
+  } catch (e) {
+    if (e.uploadError) return { ok: false, error: e.uploadError };
+    return { ok: false, error: { code: "internal", message: String(e?.message ?? e) } };
+  }
+}
+
+function collectFileSources(args) {
+  if (Array.isArray(args.files) && args.files.length) return args.files;
+  const inline = {};
+  for (const k of ["stashId", "path", "url", "dataUrl", "base64", "bytes", "mime", "name"]) {
+    if (args[k] !== undefined) inline[k] = args[k];
+  }
+  return [inline];
+}
+
+async function resolveOrStage(src) {
+  // If only stashId given, no need to stage — just look up.
+  if (src.stashId && !src.path && !src.url && !src.dataUrl && !src.base64 && !src.bytes) {
+    const idx = await readIndex();
+    const entry = idx.entries.find((e) => e.stashId === src.stashId);
+    if (!entry) throw uploadErr("stash-not-found", `no stash entry for ${src.stashId}`);
+    return {
+      stashId: entry.stashId,
+      name: entry.name,
+      mime: entry.mime,
+      sizeBytes: entry.sizeBytes,
+      path: path.join(uploadsDir(), `${entry.sha256}.${entry.ext}`),
+    };
+  }
+  const staged = await stageUpload({ source: src, mime: src.mime, name: src.name, sessionId: null });
+  return staged;
+}
+
+function pickTarget(args) {
+  if (args.selector) return { selector: args.selector };
+  if (args.ref)      return { ref: args.ref };
+  if (args.trigger)  return { trigger: args.trigger };
+  if (args.auto)     return { auto: args.auto };
+  return null;
 }
 
 async function toolUploadStage(args = {}) {
