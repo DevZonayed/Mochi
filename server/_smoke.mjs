@@ -11,6 +11,7 @@ const want = [
   "browser_links",
   "browser_snapshot_query",
   "browser_snapshot_node",
+  "browser_upload_stage",
 ];
 const names = tools.map(t => t.name);
 for (const w of want) {

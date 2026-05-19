@@ -8,9 +8,12 @@
 //     falling back to role/name self-healing on miss.
 
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+import fsp from "node:fs/promises";
 import { Memory } from "./memory.js";
 import { SessionTrace } from "./trace.js";
 import { originOf } from "./origin.js";
+import { stage as stageUpload, uploadErr, uploadsDir, gcSession, readIndex } from "./uploads.js";
 
 // ---------------- shared state (one process = one server) ----------------
 
@@ -529,6 +532,34 @@ export const tools = [
       required: ["name"],
     },
   },
+  {
+    name: "browser_upload_stage",
+    description:
+      "Stage a file (image/video/document) into the project's content-addressed upload library at `.continuum/uploads/`. " +
+      "Accepts one of: local path, https URL, data URL, or raw base64. Returns a stashId that can be passed to browser_upload_file " +
+      "(or reused across multiple uploads). Idempotent — same bytes always produce the same stashId.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        source: {
+          type: "object",
+          description: "Exactly one of: path, url, dataUrl, base64. Use `mime` to supplement base64.",
+          properties: {
+            path:    { type: "string", description: "Absolute filesystem path on this host." },
+            url:     { type: "string", description: "https:// URL to fetch." },
+            dataUrl: { type: "string", description: "Full data: URL (with mime + base64)." },
+            base64:  { type: "string", description: "Raw base64 bytes; pair with `mime`." },
+            bytes:   { type: "string", description: "Alias for `base64`." },
+          },
+        },
+        mime: { type: "string", description: "MIME override (used when source is raw base64)." },
+        name: { type: "string", description: "Friendly filename (some upload endpoints inspect form-data name)." },
+        keep: { type: "string", enum: ["session", "persistent"], default: "session" },
+        maxBytes: { type: "number", description: "Reject if file exceeds this many bytes. Default 50MB; hard cap 100MB." },
+      },
+      required: ["source"],
+    },
+  },
 ];
 
 const TOOL_TO_WS_TYPE = {
@@ -581,9 +612,33 @@ export async function handleToolCall(bridge, params) {
     case "browser_workflow_import":   return jsonResult(toolWorkflowImport(args));
     case "browser_run_history":       return jsonResult(toolRunHistory(args));
     case "browser_workflow_run":      return jsonResult(await toolWorkflowRun(bridge, args));
+    case "browser_upload_stage":      return jsonResult(await toolUploadStage(args));
   }
 
   return jsonResult(await runWireTool(bridge, name, args));
+}
+
+async function toolUploadStage(args = {}) {
+  try {
+    const result = await stageUpload({
+      source: args.source,
+      mime: args.mime,
+      name: args.name,
+      keep: args.keep ?? "session",
+      maxBytes: args.maxBytes,
+      sessionId: currentClaudeSessionId() ?? null,
+    });
+    return { ok: true, ...result };
+  } catch (e) {
+    if (e.uploadError) return { ok: false, error: e.uploadError };
+    return { ok: false, error: { code: "internal", message: String(e?.message ?? e) } };
+  }
+}
+
+function currentClaudeSessionId() {
+  // The active Claude session ID isn't stamped per-call yet; placeholder for future
+  // wiring through bridge.localClientId or a per-request sessionId hook.
+  return null;
 }
 
 function toolSessionHealth(bridge) {
