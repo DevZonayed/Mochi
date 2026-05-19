@@ -43,3 +43,40 @@ import { readIndex, writeIndex } from "./src/uploads.js";
   console.log("✓ Task 2 — atomic index.json read/write");
   await fs.rm(tmp, { recursive: true, force: true });
 }
+
+import { sniffMime, extForMime } from "./src/uploads.js";
+
+{
+  // PNG magic bytes
+  const png = Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a, 0,0,0,0]);
+  assert.equal(sniffMime(png), "image/png");
+
+  // JPEG SOI
+  const jpg = Buffer.from([0xff,0xd8,0xff,0xe0, 0,0,0,0]);
+  assert.equal(sniffMime(jpg), "image/jpeg");
+
+  // GIF
+  const gif = Buffer.from("GIF89a", "binary");
+  assert.equal(sniffMime(gif), "image/gif");
+
+  // WebP — RIFF...WEBP
+  const webp = Buffer.concat([Buffer.from("RIFF\0\0\0\0WEBP")]);
+  assert.equal(sniffMime(webp), "image/webp");
+
+  // PDF
+  const pdf = Buffer.from("%PDF-1.4");
+  assert.equal(sniffMime(pdf), "application/pdf");
+
+  // unknown
+  assert.equal(sniffMime(Buffer.from("hello")), "application/octet-stream");
+
+  // extForMime
+  assert.equal(extForMime("image/png"), "png");
+  assert.equal(extForMime("image/jpeg"), "jpg");
+  assert.equal(extForMime("application/pdf"), "pdf");
+  assert.equal(extForMime("application/octet-stream"), "bin");
+  assert.equal(extForMime("video/mp4"), "mp4");
+  assert.equal(extForMime("text/plain"), "txt");
+
+  console.log("✓ Task 3 — MIME sniffing");
+}
