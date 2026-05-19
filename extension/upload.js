@@ -383,6 +383,64 @@ const dropFn = async function (files) {
   return { dropped: fired.count > 0 };
 };
 
+async function strategyPaste(ctx) {
+  if (!ctx.fileBytes || !ctx.fileBytes.length) {
+    return { ok: false, reason: "paste requires fileBytes" };
+  }
+  let resolved;
+  try { resolved = await resolveTargetNode(ctx, ctx.target); }
+  catch (e) { return { ok: false, reason: e.message }; }
+
+  const objectIdResp = await cdp(ctx.tabId, "DOM.resolveNode", { nodeId: resolved.nodeId });
+  const objectId = objectIdResp.object.objectId;
+
+  const r = await cdp(ctx.tabId, "Runtime.callFunctionOn", {
+    objectId,
+    functionDeclaration: `function(files){ return (${pasteFn.toString()}).call(this, files); }`,
+    arguments: [{ value: ctx.fileBytes }],
+    returnByValue: true,
+    awaitPromise: true,
+  });
+  const value = r.result && r.result.value;
+  const ok = value && value.pasted === true;
+  if (!ok) return { ok: false, reason: "paste event did not produce a mutation within 500ms" };
+  return { ok: true, target: { resolved: "paste", frameId: resolved.frameId, nodeId: resolved.nodeId } };
+}
+
+// Executed in the page via Runtime.callFunctionOn. `this` is the paste target.
+// Builds Files from base64, focuses the target if focusable, then dispatches
+// a ClipboardEvent('paste') carrying a DataTransfer. Waits 500ms for a
+// MutationObserver to confirm the page reacted.
+const pasteFn = async function (files) {
+  const fileObjs = files.map((f) => {
+    const bin = atob(f.base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new File([bytes], f.name || "file", { type: f.mime || "application/octet-stream" });
+  });
+  const dt = new DataTransfer();
+  for (const f of fileObjs) dt.items.add(f);
+
+  if (typeof this.focus === "function") this.focus();
+  const target = this.isContentEditable || this.tagName === "TEXTAREA" || this.tagName === "INPUT"
+    ? this
+    : (document.activeElement || this);
+
+  const fired = { count: 0 };
+  const obs = new MutationObserver((records) => { fired.count += records.length; });
+  obs.observe(document.body, { childList: true, subtree: true, attributes: true });
+
+  target.dispatchEvent(new ClipboardEvent("paste", {
+    clipboardData: dt,
+    bubbles: true,
+    cancelable: true,
+  }));
+
+  await new Promise((r) => setTimeout(r, 500));
+  obs.disconnect();
+  return { pasted: fired.count > 0 };
+};
+
 async function getNodeBox(tabId, nodeId) {
   const r = await cdp(tabId, "DOM.getBoxModel", { nodeId });
   if (!r.model || !r.model.border) return null;
