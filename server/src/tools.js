@@ -706,11 +706,25 @@ async function toolUploadFile(bridge, args = {}) {
 
     if (args.tabId != null) params.tabId = args.tabId;
     const result = await bridge.send("upload_file", params);
+    await appendUploadLog({
+      ts: new Date().toISOString(),
+      tabId: args.tabId ?? null,
+      origin: activeOrigin || null,
+      stashId: resolved[0]?.stashId ?? null,
+      strategy: result.strategy ?? null,
+      totalMs: result.totalMs ?? null,
+      ok: !!result.ok,
+    });
     return { ok: true, ...result, files: resolved.map((r) => ({ name: r.name, mime: r.mime, sizeBytes: r.sizeBytes, stashId: r.stashId })) };
   } catch (e) {
     if (e.uploadError) return { ok: false, error: e.uploadError };
     return { ok: false, error: { code: "internal", message: String(e?.message ?? e) } };
   }
+}
+
+async function appendUploadLog(entry) {
+  const p = path.join(uploadsDir(), "log.jsonl");
+  try { await fsp.appendFile(p, JSON.stringify(entry) + "\n"); } catch {}
 }
 
 function collectFileSources(args) {
