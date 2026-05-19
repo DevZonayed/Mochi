@@ -1,0 +1,16 @@
+<!doctype html><meta charset=utf-8><title>upload-03</title>
+<div id=zone style="width:400px;height:200px;border:2px dashed #888">drop here</div>
+<div id=preview></div>
+<script>
+zone.addEventListener('dragover', e => e.preventDefault());
+zone.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  const img = document.createElement('img');
+  img.src = URL.createObjectURL(file);
+  preview.appendChild(img);
+  const fd = new FormData(); fd.append('file', file);
+  await fetch('/upload', { method: 'POST', body: fd });
+});
+</script>

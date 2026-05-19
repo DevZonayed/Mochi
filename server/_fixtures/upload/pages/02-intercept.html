@@ -1,0 +1,15 @@
+<!doctype html><meta charset=utf-8><title>upload-02</title>
+<input id=f type=file style="display:none">
+<button id=trigger>Choose photo</button>
+<div id=preview></div>
+<script>
+trigger.onclick = () => document.getElementById('f').click();
+document.getElementById('f').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  const img = document.createElement('img');
+  img.src = URL.createObjectURL(file);
+  preview.appendChild(img);
+  const fd = new FormData(); fd.append('file', file);
+  await fetch('/upload', { method: 'POST', body: fd });
+});
+</script>

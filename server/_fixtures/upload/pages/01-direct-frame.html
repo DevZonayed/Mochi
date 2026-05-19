@@ -1,0 +1,13 @@
+<!doctype html><meta charset=utf-8><title>upload-01-frame</title>
+<form><input id=f type=file accept="image/*"></form>
+<div id=preview></div>
+<script>
+document.getElementById('f').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  const img = document.createElement('img');
+  img.src = URL.createObjectURL(file);
+  preview.appendChild(img);
+  const fd = new FormData(); fd.append('file', file);
+  await fetch('/upload', { method: 'POST', body: fd });
+});
+</script>

@@ -1,0 +1,14 @@
+<!doctype html><meta charset=utf-8><title>upload-04</title>
+<div id=composer contenteditable="true" style="width:400px;height:200px;border:1px solid #888">paste here</div>
+<div id=preview></div>
+<script>
+composer.addEventListener('paste', async (e) => {
+  const file = e.clipboardData?.files?.[0];
+  if (!file) return;
+  const img = document.createElement('img');
+  img.src = URL.createObjectURL(file);
+  preview.appendChild(img);
+  const fd = new FormData(); fd.append('file', file);
+  await fetch('/upload', { method: 'POST', body: fd });
+});
+</script>
