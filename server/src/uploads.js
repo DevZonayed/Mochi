@@ -104,3 +104,49 @@ export function sniffMime(buf) {
   if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) return "video/webm";
   return "application/octet-stream";
 }
+
+function stashIdFromSha(sha) { return "u_" + sha.slice(0, 8); }
+
+export async function stageBuffer(buf, { source, mime, name, keep = "session", sessionId = null } = {}) {
+  if (!Buffer.isBuffer(buf)) throw uploadErr("decode-failed", "stageBuffer requires a Buffer");
+  const sha = sha256(buf);
+  const stashId = stashIdFromSha(sha);
+  const idx = await readIndex();
+  const existing = idx.entries.find((e) => e.sha256 === sha);
+  if (existing) {
+    existing.lastUsedAt = new Date().toISOString();
+    await writeIndex(idx);
+    return { ...entryToResult(existing), dedupedFrom: existing.stashId };
+  }
+  const sniffed = sniffMime(buf);
+  const effectiveMime = sniffed !== "application/octet-stream" ? sniffed : (mime || "application/octet-stream");
+  const ext = extForMime(effectiveMime);
+  const finalName = name || `${stashId}.${ext}`;
+  const blobPath = path.join(uploadsDir(), `${sha}.${ext}`);
+
+  const tmpBlob = path.join(uploadsDir(), ".tmp", `${sha}.${process.pid}.${Date.now()}`);
+  await fs.writeFile(tmpBlob, buf);
+  await fs.rename(tmpBlob, blobPath);
+
+  const now = new Date().toISOString();
+  const entry = {
+    stashId, sha256: sha, ext, mime: effectiveMime, name: finalName, sizeBytes: buf.length,
+    source: source ?? { kind: "unknown" }, keep, sessionId, createdAt: now, lastUsedAt: now,
+  };
+  idx.entries.push(entry);
+  await writeIndex(idx);
+  return entryToResult(entry);
+}
+
+function entryToResult(e) {
+  return {
+    stashId: e.stashId, sha256: e.sha256, path: path.join(uploadsDir(), `${e.sha256}.${e.ext}`),
+    name: e.name, mime: e.mime, sizeBytes: e.sizeBytes, source: e.source, keep: e.keep,
+  };
+}
+
+export function uploadErr(code, message, details) {
+  const e = new Error(message);
+  e.uploadError = { code, message, details };
+  return e;
+}

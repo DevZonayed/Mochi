@@ -80,3 +80,35 @@ import { sniffMime, extForMime } from "./src/uploads.js";
 
   console.log("✓ Task 3 — MIME sniffing");
 }
+
+import { stageBuffer } from "./src/uploads.js";
+
+{
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-uploads-test-"));
+  process.env.MOCHI_PROJECT_DIR = tmp;
+  await initUploads();
+
+  const png = Buffer.from([0x89,0x50,0x4e,0x47, ...Buffer.from("body-of-png")]);
+  const r1 = await stageBuffer(png, { source: { kind: "test" }, name: "first.png" });
+  assert.equal(r1.mime, "image/png");
+  assert.equal(r1.sizeBytes, png.length);
+  assert.equal(r1.dedupedFrom, undefined);
+  assert.match(r1.stashId, /^u_[0-9a-f]{8}$/);
+  assert.ok(r1.path.endsWith(".png"));
+
+  // dedup: same bytes → same stashId, dedupedFrom set
+  const r2 = await stageBuffer(png, { source: { kind: "test" }, name: "second.png" });
+  assert.equal(r2.stashId, r1.stashId);
+  assert.equal(r2.dedupedFrom, r1.stashId);
+
+  // index has exactly one entry
+  const idx = await readIndex();
+  assert.equal(idx.entries.length, 1);
+
+  // blob on disk
+  const stat = await fs.stat(r1.path);
+  assert.equal(stat.size, png.length);
+
+  console.log("✓ Task 4 — stage from buffer + dedup");
+  await fs.rm(tmp, { recursive: true, force: true });
+}
