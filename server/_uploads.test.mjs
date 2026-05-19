@@ -185,3 +185,28 @@ import { resolveSource as _rs } from "./src/uploads.js";
   srv.close();
   console.log("✓ Task 6 — URL source");
 }
+
+import { stage } from "./src/uploads.js";
+
+{
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-uploads-test-"));
+  process.env.MOCHI_PROJECT_DIR = tmp;
+  await initUploads();
+
+  const r = await stage({
+    source: { dataUrl: "data:image/png;base64," + Buffer.from([0x89,0x50,0x4e,0x47, ...Buffer.from("payload")]).toString("base64") },
+    name: "icon.png",
+  });
+  assert.equal(r.mime, "image/png");
+  assert.equal(r.name, "icon.png");
+  assert.equal(r.source.kind, "dataUrl");
+
+  // size cap
+  await assert.rejects(stage({
+    source: { base64: Buffer.alloc(1024).toString("base64"), mime: "application/octet-stream" },
+    maxBytes: 16,
+  }), /too-large/);
+
+  console.log("✓ Task 7 — stage() top-level");
+  await fs.rm(tmp, { recursive: true, force: true });
+}

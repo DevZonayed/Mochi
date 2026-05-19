@@ -253,3 +253,41 @@ async function resolveUrlSource(url, maxBytes) {
   }
   throw uploadErr("fetch-failed", `too many redirects`, { redirects: URL_MAX_REDIRECTS, url });
 }
+
+const DEFAULT_MAX_BYTES = Number(process.env.SUPER_TESTER_MAX_UPLOAD_BYTES) || 100 * 1024 * 1024;
+
+export async function stage({ source, mime, name, keep = "session", sessionId = null, maxBytes } = {}) {
+  await initUploads();
+  const cap = Math.min(maxBytes || DEFAULT_MAX_BYTES, DEFAULT_MAX_BYTES);
+  const resolved = await resolveSource({ ...source, maxBytes: cap });
+  if (resolved.buf.length > cap) {
+    throw uploadErr("too-large", `staged bytes exceed ${cap}`, { sizeBytes: resolved.buf.length, maxBytes: cap });
+  }
+  if (resolved.kind === "stash") {
+    // already in library — just bump and return
+    const idx = await readIndex();
+    const entry = idx.entries.find((e) => e.stashId === resolved.entry.stashId);
+    if (entry) {
+      entry.lastUsedAt = new Date().toISOString();
+      if (keep === "persistent") entry.keep = "persistent";
+      await writeIndex(idx);
+      return { ...entryToResult(entry), dedupedFrom: entry.stashId };
+    }
+  }
+  return stageBuffer(resolved.buf, {
+    source: sourceDescriptor(source, resolved),
+    mime: mime || resolved.mime,
+    name,
+    keep,
+    sessionId,
+  });
+}
+
+function sourceDescriptor(rawSource, resolved) {
+  if (resolved.kind === "url")     return { kind: "url",     value: resolved.finalUrl };
+  if (resolved.kind === "path")    return { kind: "path",    value: resolved.originalPath };
+  if (resolved.kind === "dataUrl") return { kind: "dataUrl" };
+  if (resolved.kind === "base64")  return { kind: "base64" };
+  if (resolved.kind === "stash")   return { kind: "stash",   stashId: resolved.entry.stashId };
+  return { kind: "unknown" };
+}
