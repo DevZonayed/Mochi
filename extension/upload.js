@@ -256,9 +256,17 @@ async function resolveTabIdForClient(params, clientId) {
 
 function isPathAllowed(p) {
   if (typeof p !== "string" || !p.length) return false;
+  // Reject obvious path-traversal attempts even if the prefix matches. The
+  // server normalises paths before sending, so any `..` reaching us is
+  // suspicious enough to refuse outright.
+  if (p.includes("/../") || p.includes("\\..\\") || p.endsWith("/..") || p.endsWith("\\..")) return false;
   // .continuum/uploads/ relative segment must be in the path. Match both
   // posix-style and win32-style separators so the check is portable.
   if (p.includes("/.continuum/uploads/") || p.includes("\\.continuum\\uploads\\")) return true;
+  // Optional extra-prefix allowlist for callers running custom upload roots.
+  // Set globalThis.SUPER_TESTER_UPLOAD_ALLOW_PATHS to a colon-delimited list
+  // (the server can populate this via the wire payload if it wants to expand
+  // the allowlist for a specific request).
   const extras = (globalThis.SUPER_TESTER_UPLOAD_ALLOW_PATHS || "").split(":").filter(Boolean);
   return extras.some((prefix) => p.startsWith(prefix));
 }
