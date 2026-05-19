@@ -541,6 +541,17 @@ async function withVisuals(tabId, clientId, intent, doAction) {
 // build up a request map. Anything else is ignored.
 chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
   if (tabId == null || !tabBuffers.has(tabId) && !attachedTabs.has(tabId)) return;
+  // Fan transient CDP events out to any registered upload-module listeners
+  // (Page.fileChooserOpened, Network.responseReceived for smart-wait, ...).
+  // Listeners are short-lived and own their own teardown.
+  const transient = globalThis.__mochiCdpListeners;
+  if (transient && transient.size) {
+    for (const entry of transient.values()) {
+      if (entry.tabId === tabId) {
+        try { entry.listener(method, params); } catch {}
+      }
+    }
+  }
   try {
     switch (method) {
       case "Runtime.consoleAPICalled": {

@@ -274,6 +274,65 @@ async function autoDetectFromAnchor(ctx, anchor, frameId) {
   return { nodeId: nodeMeta.nodeId, frameId, isTrigger: false };
 }
 
+async function strategyIntercept(ctx) {
+  // For target.trigger, click the trigger spec; otherwise click the resolved
+  // target itself (works when the user passes a button selector directly).
+  const triggerSpec = ctx.target.trigger || ctx.target;
+  let resolved;
+  try { resolved = await resolveTargetNode(ctx, triggerSpec); }
+  catch (e) { return { ok: false, reason: e.message }; }
+
+  await cdp(ctx.tabId, "Page.setInterceptFileChooserDialog", { enabled: true });
+
+  // Register a transient CDP-event listener via the shared map background.js
+  // fans events into. When Page.fileChooserOpened fires for this tab we
+  // accept it with our file paths.
+  let chooserFired = false;
+  let chooserBackendNodeId = null;
+  const listener = (method, params) => {
+    if (method === "Page.fileChooserOpened") {
+      chooserFired = true;
+      chooserBackendNodeId = params && params.backendNodeId;
+      cdp(ctx.tabId, "Page.handleFileChooser", { action: "accept", files: ctx.filePaths }).catch(() => {});
+    }
+  };
+  if (!globalThis.__mochiCdpListeners) globalThis.__mochiCdpListeners = new Map();
+  const listenerKey = "upload-" + ctx.tabId + "-" + Math.random().toString(36).slice(2);
+  globalThis.__mochiCdpListeners.set(listenerKey, { tabId: ctx.tabId, listener });
+
+  try {
+    // Click via Input.dispatchMouseEvent at the node's center. We use raw CDP
+    // input dispatch (not chrome.scripting el.click()) because user-initiated
+    // clicks are what trigger file chooser dialogs cross-platform.
+    const box = await getNodeBox(ctx.tabId, resolved.nodeId);
+    if (!box) return { ok: false, reason: "trigger node has no box (display:none?)" };
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await cdp(ctx.tabId, "Input.dispatchMouseEvent", { type: "mousePressed",  x, y, button: "left", clickCount: 1 });
+    await cdp(ctx.tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+
+    // Wait up to 3s for the chooser event to fire.
+    const deadline = Date.now() + 3000;
+    while (!chooserFired && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return chooserFired
+      ? { ok: true, target: { resolved: "trigger+chooser", frameId: resolved.frameId, backendNodeId: chooserBackendNodeId } }
+      : { ok: false, reason: "chooser-timeout" };
+  } finally {
+    globalThis.__mochiCdpListeners.delete(listenerKey);
+    try { await cdp(ctx.tabId, "Page.setInterceptFileChooserDialog", { enabled: false }); } catch {}
+  }
+}
+
+async function getNodeBox(tabId, nodeId) {
+  const r = await cdp(tabId, "DOM.getBoxModel", { nodeId });
+  if (!r.model || !r.model.border) return null;
+  const b = r.model.border;
+  const x1 = b[0], y1 = b[1], x2 = b[2], y2 = b[5];
+  return { x: Math.min(x1, x2), y: Math.min(y1, y2), width: r.model.width, height: r.model.height };
+}
+
 // Executed inside the page via Runtime.callFunctionOn — `this` is the anchor
 // element. Returns the first <input type=file> found among descendants,
 // following siblings (<=5 hops), or ancestors' descendants (<=3 levels up).
