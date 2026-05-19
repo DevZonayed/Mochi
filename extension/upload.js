@@ -118,3 +118,137 @@ function isPathAllowed(p) {
 }
 
 globalThis.__mochiHandleUploadFile = handleUploadFile;
+
+// ---------------- target resolution + CDP helpers ----------------
+
+async function cdp(tabId, method, params) {
+  // background.js mirrors its cdp() helper onto globalThis at module init.
+  // We read it lazily so module-eval order is irrelevant.
+  if (typeof globalThis.cdp !== "function") {
+    throw new Error("upload: globalThis.cdp not available (background.js wiring missing)");
+  }
+  return globalThis.cdp(tabId, method, params);
+}
+
+async function getDocumentNodeId(tabId, frameId) {
+  if (frameId && frameId !== "top") {
+    // Resolve the frame's content document via its owning iframe element.
+    const owner = await cdp(tabId, "DOM.getFrameOwner", { frameId });
+    const node = await cdp(tabId, "DOM.describeNode", {
+      backendNodeId: owner.backendNodeId,
+      depth: 0,
+      pierce: false,
+    });
+    if (!node.node || !node.node.contentDocument) {
+      throw new Error(`frame ${frameId} has no contentDocument (cross-origin?)`);
+    }
+    return node.node.contentDocument.nodeId;
+  }
+  const root = await cdp(tabId, "DOM.getDocument", { depth: 0, pierce: false });
+  return root.root.nodeId;
+}
+
+function findFrame(node, frameId) {
+  if (node && node.frame && node.frame.id === frameId) return node;
+  for (const child of (node && node.childFrames) || []) {
+    const r = findFrame(child, frameId);
+    if (r) return r;
+  }
+  return null;
+}
+
+async function resolveTargetNode(ctx, target) {
+  // Returns { nodeId, frameId, isTrigger? } or throws target-not-found.
+  // NOTE: In this codebase, target.ref is also a CSS selector (mochi snapshots
+  // emit selectors as the "ref" field). There is no separate ref->nodeId
+  // table to consult, so we treat ref identically to selector.
+  const frames = await listFrames(ctx);
+  for (const frameId of frames) {
+    try {
+      if (target.selector || target.ref) {
+        const selector = target.selector || target.ref;
+        const doc = await getDocumentNodeId(ctx.tabId, frameId);
+        const r = await cdp(ctx.tabId, "DOM.querySelector", { nodeId: doc, selector });
+        if (r.nodeId) return { nodeId: r.nodeId, frameId };
+      } else if (target.trigger) {
+        return resolveTargetNode(ctx, target.trigger); // recurse with selector/ref
+      } else if (target.auto) {
+        const anchor = await resolveAnchor(ctx, target.auto.near, frameId);
+        if (anchor) return await autoDetectFromAnchor(ctx, anchor, frameId);
+      }
+    } catch (e) {
+      // try next frame
+    }
+  }
+  throw new Error("target-not-found");
+}
+
+async function listFrames(ctx) {
+  if (ctx.frames === "top") return ["top"];
+  if (ctx.frames && ctx.frames !== "all") return [ctx.frames];
+  const tree = await cdp(ctx.tabId, "Page.getFrameTree", {});
+  const all = ["top"];
+  collectFrameIds(tree.frameTree, all);
+  return all;
+}
+
+function collectFrameIds(node, out) {
+  for (const child of (node && node.childFrames) || []) {
+    if (child.frame && child.frame.id) out.push(child.frame.id);
+    collectFrameIds(child, out);
+  }
+}
+
+async function resolveAnchor(ctx, near, frameId) {
+  // No separate ref table in this codebase — `near` is always a CSS selector.
+  const doc = await getDocumentNodeId(ctx.tabId, frameId);
+  const r = await cdp(ctx.tabId, "DOM.querySelector", { nodeId: doc, selector: near });
+  return r.nodeId ? { nodeId: r.nodeId } : null;
+}
+
+async function autoDetectFromAnchor(ctx, anchor, frameId) {
+  // Use Runtime.callFunctionOn against the anchor's JS object to walk the DOM
+  // and locate a nearby <input type="file">.
+  const objectIdResp = await cdp(ctx.tabId, "DOM.resolveNode", { nodeId: anchor.nodeId });
+  const objectId = objectIdResp.object.objectId;
+  const r = await cdp(ctx.tabId, "Runtime.callFunctionOn", {
+    objectId,
+    functionDeclaration: autoDetectFn.toString(),
+  });
+  if (!r.result || !r.result.objectId) {
+    // No <input type=file> found nearby — caller should treat anchor as a
+    // trigger element (e.g. for the intercept strategy).
+    return { nodeId: anchor.nodeId, frameId, isTrigger: true };
+  }
+  const nodeMeta = await cdp(ctx.tabId, "DOM.requestNode", { objectId: r.result.objectId });
+  return { nodeId: nodeMeta.nodeId, frameId, isTrigger: false };
+}
+
+// Executed inside the page via Runtime.callFunctionOn — `this` is the anchor
+// element. Returns the first <input type=file> found among descendants,
+// following siblings (<=5 hops), or ancestors' descendants (<=3 levels up).
+const autoDetectFn = function () {
+  const isFileInput = (n) => n && n.tagName === "INPUT" && n.type === "file";
+  if (this.querySelector) {
+    const desc = this.querySelector('input[type="file"]');
+    if (desc) return desc;
+  }
+  let cur = this, hops = 0;
+  while (cur && hops < 5) {
+    cur = cur.nextElementSibling;
+    if (isFileInput(cur)) return cur;
+    if (cur && cur.querySelector) {
+      const x = cur.querySelector('input[type="file"]');
+      if (x) return x;
+    }
+    hops++;
+  }
+  let anc = this.parentElement, depth = 0;
+  while (anc && depth < 3) {
+    const x = anc.querySelector('input[type="file"]');
+    if (x) return x;
+    anc = anc.parentElement;
+    depth++;
+  }
+  return null;
+};
