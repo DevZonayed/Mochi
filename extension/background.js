@@ -3,6 +3,8 @@
 // Code session / MCP client), per-session tab groups, and chrome.debugger
 // (CDP) attachments. Boundary listeners find the right session per-tab.
 
+import { handleUploadFile } from "./upload.js";
+
 const WS_URL = "ws://127.0.0.1:9009";
 const NAV_TIMEOUT_MS = 30000;
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
@@ -409,6 +411,21 @@ async function cdp(tabId, method, params = {}) {
     DBG("cdp.error", { tabId, method, msg });
     throw e;
   }
+}
+
+// Expose a handful of helpers on globalThis so the upload.js module (statically
+// imported above) can reach back into them without forming a circular import.
+// Reads happen lazily, inside async request handlers, so module-eval order
+// doesn't matter.
+globalThis.cdp = cdp;
+globalThis.ensureAttached = ensureAttached;
+globalThis.getSession = getSession;
+globalThis.targetTab = targetTab;
+
+// Wrapper used by the dispatch switch above. Kept tiny so upload.js owns the
+// strategy logic and background.js only routes the call.
+async function uploadFile(p, clientId) {
+  return handleUploadFile(p, clientId);
 }
 
 // Chrome calls this whenever a debugger session ends without our asking. The
@@ -873,6 +890,7 @@ async function dispatch(type, p, clientId) {
     case "evaluate":           return evaluate(p, clientId);
     case "console_messages":   return consoleMessages(p, clientId);
     case "network_requests":   return networkRequests(p, clientId);
+    case "upload_file":        return uploadFile(p, clientId);
     default: throw new Error(`unknown command: ${type}`);
   }
 }
