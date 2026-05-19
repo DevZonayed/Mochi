@@ -325,6 +325,64 @@ async function strategyIntercept(ctx) {
   }
 }
 
+async function strategyDrop(ctx) {
+  if (!ctx.fileBytes || !ctx.fileBytes.length) {
+    return { ok: false, reason: "drop requires fileBytes (server should have sent them)" };
+  }
+  let resolved;
+  try { resolved = await resolveTargetNode(ctx, ctx.target); }
+  catch (e) { return { ok: false, reason: e.message }; }
+
+  const objectIdResp = await cdp(ctx.tabId, "DOM.resolveNode", { nodeId: resolved.nodeId });
+  const objectId = objectIdResp.object.objectId;
+
+  // Build the in-page function by inlining dropFn into a thin wrapper. We pass
+  // fileBytes as an argument value so they show up as `files` inside the page.
+  const r = await cdp(ctx.tabId, "Runtime.callFunctionOn", {
+    objectId,
+    functionDeclaration: `function(files){ return (${dropFn.toString()}).call(this, files); }`,
+    arguments: [{ value: ctx.fileBytes }],
+    returnByValue: true,
+    awaitPromise: true,
+  });
+  const value = r.result && r.result.value;
+  const ok = value === true || (value && value.dropped === true);
+  if (!ok) return { ok: false, reason: "drop event did not produce a mutation within 500ms" };
+  return { ok: true, target: { resolved: "drop", frameId: resolved.frameId, nodeId: resolved.nodeId } };
+}
+
+// Executed in the page via Runtime.callFunctionOn. `this` is the drop target.
+// Synthesizes File objects from base64 bytes, builds a DataTransfer, fires
+// dragenter -> dragover -> drop, then waits 500ms for a MutationObserver to
+// observe at least one mutation (proof the page reacted).
+const dropFn = async function (files) {
+  const fileObjs = files.map((f) => {
+    const bin = atob(f.base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new File([bytes], f.name || "file", { type: f.mime || "application/octet-stream" });
+  });
+  const dt = new DataTransfer();
+  for (const f of fileObjs) dt.items.add(f);
+
+  const fired = { count: 0 };
+  const obs = new MutationObserver((records) => { fired.count += records.length; });
+  obs.observe(document.body, { childList: true, subtree: true, attributes: true });
+
+  const dispatch = (type) => this.dispatchEvent(new DragEvent(type, {
+    dataTransfer: dt,
+    bubbles: true,
+    cancelable: true,
+  }));
+  dispatch("dragenter");
+  dispatch("dragover");
+  dispatch("drop");
+
+  await new Promise((r) => setTimeout(r, 500));
+  obs.disconnect();
+  return { dropped: fired.count > 0 };
+};
+
 async function getNodeBox(tabId, nodeId) {
   const r = await cdp(tabId, "DOM.getBoxModel", { nodeId });
   if (!r.model || !r.model.border) return null;
