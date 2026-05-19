@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/index.js",
     "build": "esbuild src/index.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/server.bundle.mjs --legal-comments=external --banner:js=\"import{createRequire as ___cr}from'node:module';const require=___cr(import.meta.url);\"",
-    "test": "node _smoke.mjs && node _integration.mjs && node _multi-client.mjs",
+    "test": "node _smoke.mjs && node _uploads.test.mjs && node _integration.mjs && node _multi-client.mjs",
     "test:smoke": "node _smoke.mjs",
     "test:integration": "node _integration.mjs",
     "test:multi": "node _multi-client.mjs",
