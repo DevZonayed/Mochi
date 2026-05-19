@@ -667,6 +667,14 @@ export async function handleToolCall(bridge, params) {
   if (name === "browser_upload_file") {
     return jsonResult(await toolUploadFile(bridge, args));
   }
+  if (name === "browser_session_end") {
+    const sid = currentClaudeSessionId();
+    const res = await runWireTool(bridge, name, args);
+    if (sid) {
+      try { await gcSession(sid); } catch {}
+    }
+    return jsonResult(res);
+  }
   return jsonResult(await runWireTool(bridge, name, args));
 }
 
