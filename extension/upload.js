@@ -141,9 +141,105 @@ async function dispatchPostEvents(ctx, resolved) {
   }
 }
 
-async function smartWait(_ctx) {
-  // Stub — implemented in Task 18.
-  return null;
+async function smartWait(ctx) {
+  const wf = ctx.waitFor || { mode: "smart", timeoutMs: 15000 };
+  if (wf.mode === "none") return null;
+  const timeoutMs = wf.timeoutMs == null ? 15000 : wf.timeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+
+  // Network 2xx listener — fires whenever an upload-ish URL responds 2xx.
+  const networkPattern = wf.networkPattern
+    ? new RegExp(wf.networkPattern, "i")
+    : /upload|media|attach|photo/i;
+  let netHit = null;
+  const onEvent = (method, params) => {
+    if (method !== "Network.responseReceived") return;
+    const resp = params && params.response;
+    if (!resp) return;
+    const url = resp.url || "";
+    const status = resp.status || 0;
+    if (status >= 200 && status < 300 && networkPattern.test(url)) {
+      netHit = { signal: "network-2xx", url, status };
+    }
+  };
+  if (!globalThis.__mochiCdpListeners) globalThis.__mochiCdpListeners = new Map();
+  const key = "smartwait-" + ctx.tabId + "-" + Math.random().toString(36).slice(2);
+  globalThis.__mochiCdpListeners.set(key, { tabId: ctx.tabId, listener: onEvent });
+
+  // DOM MutationObserver installed in-page — looks for preview elements
+  // (blob:/data: image+video sources by default, or wf.previewSelector).
+  const observerId = await installPreviewObserver(ctx.tabId, wf.previewSelector);
+
+  let mutationSampled = 0;
+  try {
+    while (Date.now() < deadline) {
+      if (netHit) return { ...netHit, durationMs: Date.now() - startedAt };
+      const dom = await pollPreviewObserver(ctx.tabId, observerId);
+      mutationSampled = dom.mutations;
+      if (dom.match) {
+        return { signal: "preview-img", selector: dom.selector, durationMs: Date.now() - startedAt };
+      }
+      if (wf.successSelector) {
+        try {
+          const doc = await getDocumentNodeId(ctx.tabId);
+          const r = await cdp(ctx.tabId, "DOM.querySelector", { nodeId: doc, selector: wf.successSelector });
+          if (r.nodeId) {
+            const box = await getNodeBox(ctx.tabId, r.nodeId);
+            if (box && box.width > 0 && box.height > 0) {
+              return { signal: "successSelector", selector: wf.successSelector, durationMs: Date.now() - startedAt };
+            }
+          }
+        } catch {}
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return { signal: null, reason: "timeout", evidence: { mutationSampled } };
+  } finally {
+    globalThis.__mochiCdpListeners.delete(key);
+    await uninstallPreviewObserver(ctx.tabId, observerId).catch(() => {});
+  }
+}
+
+// observerId -> { tabId } — kept so we can clean up across multiple parallel
+// smart-waits if needed.
+const PREVIEW_OBSERVERS = new Map();
+
+async function installPreviewObserver(tabId, customSelector) {
+  const selector = customSelector || 'img[src^="blob:"],img[src^="data:"],video[src^="blob:"]';
+  const observerId = "mochi_obs_" + Math.random().toString(36).slice(2);
+  const expr = `
+    (function(){
+      const sel = ${JSON.stringify(selector)};
+      window.__mochiObservers = window.__mochiObservers || {};
+      const state = window.__mochiObservers[${JSON.stringify(observerId)}] = { matched: false, mutations: 0, selector: sel };
+      const obs = new MutationObserver((records) => {
+        state.mutations += records.length;
+        if (!state.matched && document.querySelector(sel)) state.matched = true;
+      });
+      obs.observe(document.body, { childList: true, subtree: true, attributes: true });
+      state.disconnect = () => obs.disconnect();
+    })();
+  `;
+  await cdp(tabId, "Runtime.evaluate", { expression: expr });
+  PREVIEW_OBSERVERS.set(observerId, { tabId });
+  return observerId;
+}
+
+async function pollPreviewObserver(tabId, observerId) {
+  const r = await cdp(tabId, "Runtime.evaluate", {
+    expression: `JSON.stringify({ match: (window.__mochiObservers && window.__mochiObservers[${JSON.stringify(observerId)}] && window.__mochiObservers[${JSON.stringify(observerId)}].matched) || false, mutations: (window.__mochiObservers && window.__mochiObservers[${JSON.stringify(observerId)}] && window.__mochiObservers[${JSON.stringify(observerId)}].mutations) || 0, selector: (window.__mochiObservers && window.__mochiObservers[${JSON.stringify(observerId)}] && window.__mochiObservers[${JSON.stringify(observerId)}].selector) || '' })`,
+    returnByValue: true,
+  });
+  try { return JSON.parse((r.result && r.result.value) || "{}"); }
+  catch { return { match: false, mutations: 0, selector: "" }; }
+}
+
+async function uninstallPreviewObserver(tabId, observerId) {
+  PREVIEW_OBSERVERS.delete(observerId);
+  await cdp(tabId, "Runtime.evaluate", {
+    expression: `(function(){ const s = window.__mochiObservers && window.__mochiObservers[${JSON.stringify(observerId)}]; if (s && s.disconnect) s.disconnect(); if (window.__mochiObservers) delete window.__mochiObservers[${JSON.stringify(observerId)}]; })();`,
+  });
 }
 
 async function resolveTabIdForClient(params, clientId) {
