@@ -540,10 +540,7 @@ export async function resolveRunInputs(playbookId, callerInputs) {
   if (!pb) throw playbookErr("playbook-not-found", `no playbook ${playbookId}`);
   await secrets.initSecrets();
   const { resolved, missing } = secrets.resolveInputs(pb, callerInputs);
-  if (missing.length) {
-    throw playbookErr("playbook-input-missing", `required secrets unavailable: ${missing.map((m) => m.name).join(", ")}`, { missing });
-  }
-  return { resolved, secretValues: extractSecretValues(pb, resolved) };
+  return { playbook: pb, resolved, missing, secretValues: extractSecretValues(pb, resolved) };
 }
 
 function extractSecretValues(pb, resolved) {

@@ -280,3 +280,34 @@ import { composeResolve } from "./src/playbooks.js";
   console.log("✓ Task 6 — composeResolve");
   await fs.rm(tmp, { recursive: true, force: true });
 }
+
+{
+  // Refactored resolveRunInputs returns { playbook, resolved, missing, secretValues }
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-pb-resolve-"));
+  process.env.MOCHI_PROJECT_DIR = tmp;
+  await initPlaybooks();
+  const meta = {
+    origin: "example.com", feature: "thing", title: "x", verifiable: true,
+    preconditions: [],
+    inputs: [
+      { name: "user",     type: "text",   required: true,  ref: null },
+      { name: "password", type: "secret", required: true,  ref: "${env:DEF_NOT_SET_VAR}" },
+    ],
+    outputs: [], composes: [], next: null, cron: null,
+    last_verified: null, success_count: 0, playbook_version: 1, schema_version: 1,
+  };
+  const body = "## Summary\nx\n## Preconditions\nx\n## Steps\nx\n## Verification\nx\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n";
+  await savePlaybook({ id: "example.com/thing", meta, body, workflow: { steps: [] } });
+
+  // No throw — returns missing[] for unresolved required inputs.
+  const { resolveRunInputs } = await import("./src/playbooks.js");
+  const r = await resolveRunInputs("example.com/thing", {});
+  assert.ok(r.playbook);
+  assert.ok(r.missing.length >= 2);
+  const names = r.missing.map((m) => m.name);
+  assert.ok(names.includes("user"));
+  assert.ok(names.includes("password"));
+
+  console.log("✓ resolveRunInputs returns missing");
+  await fs.rm(tmp, { recursive: true, force: true });
+}
