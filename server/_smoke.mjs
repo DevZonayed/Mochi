@@ -23,6 +23,9 @@ const want = [
   "browser_playbook_secret_check",
   "browser_playbook_seed_from_codebase",
   "browser_playbook_diff_accept",
+  "browser_playbook_export",
+  "browser_playbook_import",
+  "browser_playbook_dashboard",
 ];
 const names = tools.map(t => t.name);
 for (const w of want) {

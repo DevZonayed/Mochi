@@ -18,6 +18,8 @@ import * as playbooks from "./playbooks.js";
 import { validatePlaybook as validateSecrets, listAvailableSecrets, initSecrets } from "./secrets.js";
 import { seedFromCodebase } from "./codebase-seed.js";
 import { acceptStepShots, pngSha } from "./visual-diff.js";
+import { exportBundle, importBundle } from "./playbook-bundles.js";
+import { generateDashboard } from "./playbook-dashboard.js";
 
 // ---------------- shared state (one process = one server) ----------------
 
@@ -696,6 +698,36 @@ export const tools = [
       steps: { type: "array", items: { type: "number" } },
     }, required: ["id", "runId"] },
   },
+  {
+    name: "browser_playbook_export",
+    description: "Export one or more playbooks (and their screenshots) to a single JSON bundle file. Useful for sharing across projects or teams.",
+    inputSchema: { type: "object", properties: {
+      ids:          { type: "array", items: { type: "string" } },
+      origin:       { type: "string" },
+      tag:          { type: "string" },
+      outputPath:   { type: "string" },
+      stripSecrets: { type: "boolean", default: true },
+    } },
+  },
+  {
+    name: "browser_playbook_import",
+    description: "Import a playbook bundle (local file, inline JSON, or https URL). Optionally overwrite existing playbooks or rewrite their origin (e.g., staging → production).",
+    inputSchema: { type: "object", properties: {
+      bundlePath:    { type: "string" },
+      bundleJson:    { type: "string" },
+      url:           { type: "string" },
+      overwrite:     { type: "boolean", default: false },
+      rewriteOrigin: { type: "string" },
+    } },
+  },
+  {
+    name: "browser_playbook_dashboard",
+    description: "Generate a self-contained HTML dashboard from the playbook library. Pass open:true to also navigate to it (requires an active browser session).",
+    inputSchema: { type: "object", properties: {
+      outputPath: { type: "string" },
+      open:       { type: "boolean", default: true },
+    } },
+  },
 ];
 
 const TOOL_TO_WS_TYPE = {
@@ -760,6 +792,9 @@ export async function handleToolCall(bridge, params) {
     case "browser_playbook_secret_check":       return jsonResult(await toolPlaybookSecretCheck(args));
     case "browser_playbook_seed_from_codebase": return jsonResult(await toolPlaybookSeedFromCodebase(args));
     case "browser_playbook_diff_accept":        return jsonResult(await toolPlaybookDiffAccept(args));
+    case "browser_playbook_export":             return jsonResult(await toolPlaybookExport(args));
+    case "browser_playbook_import":             return jsonResult(await toolPlaybookImport(args));
+    case "browser_playbook_dashboard":          return jsonResult(await toolPlaybookDashboard(bridge, args));
   }
 
   if (name === "browser_upload_file") {
@@ -1985,7 +2020,11 @@ async function toolPlaybookDiffAccept({ id, runId, steps } = {}) {
 async function toolPlaybookRun(bridge, args = {}) {
   const { id, inputs: callerInputs = {} } = args;
   try {
-    const { resolved, secretValues } = await playbooks.resolveRunInputs(id, callerInputs);
+    const { playbook, resolved, missing, secretValues } = await playbooks.resolveRunInputs(id, callerInputs);
+    if (missing.length > 0) {
+      const needs = missing.map((m) => annotateNeed(m, playbook));
+      return { ok: true, verdict: "blocked", reason: "missing-required-inputs", needs, runId: null };
+    }
     const plan = await playbooks.composeResolve(id, resolved);
     const legs = [];
     const runId = "r" + Math.random().toString(36).slice(2, 8);
@@ -1997,6 +2036,49 @@ async function toolPlaybookRun(bridge, args = {}) {
     const overall = legs.every((l) => l.verdict === "pass") ? "pass" : (legs.some((l) => l.verdict === "warn") ? "warn" : "fail");
     return { ok: true, verdict: overall, runId, legs };
   } catch (e) { return unwrapPlaybookError(e); }
+}
+
+function annotateNeed(m, playbook) {
+  const spec = (playbook?.meta?.inputs || []).find((s) => s.name === m.name);
+  const need = { name: m.name, type: spec?.type || "text", ref: m.ref, source: m.source };
+  if (m.source === "env" && m.ref) {
+    const inner = /\$\{([^}]+)\}/.exec(m.ref)?.[1] || "";
+    const ci = inner.indexOf(":");
+    const varName = ci < 0 ? inner : inner.slice(ci + 1).trim();
+    need.hint = `Set env var \`${varName}\``;
+  } else if (m.source === "file") {
+    const inner = /\$\{secret:([^}]+)\}/.exec(m.ref)?.[1] || "";
+    need.hint = `Create \`.continuum/secrets/${inner}.txt\``;
+  } else if (m.source === "1password") {
+    need.hint = "Sign in to 1Password CLI: `op signin`";
+  } else {
+    need.hint = `Pass via \`inputs.${m.name}\``;
+  }
+  return need;
+}
+
+async function toolPlaybookExport(args = {}) {
+  try { return { ok: true, ...(await exportBundle(args)) }; }
+  catch (e) { return { ok: false, error: { code: "internal", message: String(e?.message ?? e) } }; }
+}
+
+async function toolPlaybookImport(args = {}) {
+  try { return await importBundle(args); }
+  catch (e) {
+    const msg = String(e?.message ?? e);
+    const code = msg.startsWith("bundle-") ? msg.split(":")[0] : "internal";
+    return { ok: false, error: { code, message: msg } };
+  }
+}
+
+async function toolPlaybookDashboard(bridge, args = {}) {
+  try {
+    const r = await generateDashboard(args);
+    if (args.open !== false && bridge?.isConnected?.()) {
+      try { await bridge.send("navigate", { url: "file://" + r.path }); } catch {}
+    }
+    return r;
+  } catch (e) { return { ok: false, error: { code: "internal", message: String(e?.message ?? e) } }; }
 }
 
 async function replayPlaybookLeg(bridge, leg, runId, secretValues) {
