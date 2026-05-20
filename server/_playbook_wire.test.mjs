@@ -82,4 +82,40 @@ assert.equal(p.ok, false);
 assert.equal(p.error.code, "playbook-not-found");
 
 console.log("✓ playbook wire contract");
+
+// ---------------- v1.5 wire contracts ----------------
+
+// secret_check
+process.env.MOCHI_TEST_SECRET = "topsecret";
+await handleToolCall(bridge, { name: "browser_playbook_save", arguments: {
+  id: "test.example.com/secret-flow",
+  meta: { origin: "test.example.com", feature: "secret-flow", verifiable: true,
+    inputs: [
+      { name: "password", type: "secret", required: true, ref: "${env:MOCHI_TEST_SECRET}" },
+      { name: "missing",  type: "secret", required: true, ref: "${env:NOT_SET_VAR}" },
+    ], outputs: [] },
+  body: "## Summary\nx\n## Preconditions\nx\n## Steps\nx\n## Verification\nx\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n",
+  workflow: { steps: [] },
+}});
+const sc = JSON.parse((await handleToolCall(bridge, { name: "browser_playbook_secret_check", arguments: { id: "test.example.com/secret-flow" } })).content[0].text);
+assert.equal(sc.ok, true);
+assert.equal(sc.secrets.length, 2);
+assert.equal(sc.secrets.find((s) => s.name === "password").available, true);
+assert.equal(sc.secrets.find((s) => s.name === "missing").available, false);
+
+// seed_from_codebase against the next-app fixture
+const fixtureRoot = path.join(path.dirname(import.meta.url.replace("file://", "")), "_fixtures/codebase/next-app");
+const seedRaw = await handleToolCall(bridge, { name: "browser_playbook_seed_from_codebase", arguments: { projectRoot: fixtureRoot, domain: "fixture.example.com", dryRun: true } });
+const seed = JSON.parse(seedRaw.content[0].text);
+assert.equal(seed.ok, true);
+assert.equal(seed.framework, "next-app-router");
+assert.ok(seed.drafts.length >= 2);
+
+// diff_accept: smoke-test wiring (no real run; just confirm error code on missing run)
+const da = JSON.parse((await handleToolCall(bridge, { name: "browser_playbook_diff_accept", arguments: { id: "test.example.com/secret-flow", runId: "r-nonexistent" } })).content[0].text);
+assert.equal(da.ok, true);
+assert.equal(da.accepted?.length || 0, 0);
+
+console.log("✓ v1.5 wire contracts");
+delete process.env.MOCHI_TEST_SECRET;
 await fs.rm(tmp, { recursive: true, force: true });
