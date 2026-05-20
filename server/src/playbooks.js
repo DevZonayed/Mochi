@@ -306,3 +306,178 @@ function tokenize(s) {
   return (s || "").toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 2 && !STOPWORDS.has(t));
 }
 const STOPWORDS = new Set(["the","and","for","with","from","that","this","into","onto","when","then","than","but","not","you"]);
+
+// ---------------- promoteFromTrace ----------------
+
+const TOOL_TO_ACTION = {
+  browser_navigate:   "navigate",
+  browser_click:      "click",
+  browser_click_at:   "click",
+  browser_type:       "type",
+  browser_press_key:  "press_key",
+  browser_scroll:     "scroll",
+  browser_wait:       "wait",
+  browser_assert:     "assert",
+  browser_upload_file:"upload",
+};
+
+export async function promoteFromTrace({ label, title, verifiable = false, trace, screenshots = [], explicitInputs, explicitOutputs, inputs, outputs }) {
+  if (!Array.isArray(trace) || !trace.length) throw playbookErr("playbook-validation-failed", "trace empty");
+  const firstNav = trace.find((t) => t.tool === "browser_navigate" && t.args?.url);
+  if (!firstNav) throw playbookErr("playbook-validation-failed", "trace has no navigate step — cannot infer origin");
+  const origin = new URL(firstNav.args.url).hostname;
+  const feature = (label || "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!feature) throw playbookErr("playbook-validation-failed", "label required to derive feature slug");
+  const id = `${origin}/${feature}`;
+
+  const steps = [];
+  for (const call of trace) {
+    const action = TOOL_TO_ACTION[call.tool];
+    if (!action) continue;
+    const step = { action };
+    if (action === "navigate") step.url = call.args.url;
+    if (action === "click" || action === "type" || action === "upload") {
+      if (call.args.intent) step.intent = call.args.intent;
+      else if (call.args.selector) step.selector = call.args.selector;
+    }
+    if (action === "type" && call.args.value !== undefined) step.valueRef = inferValueRef(call.args.intent, call.args.value);
+    if (action === "upload" && call.args.files) step.filesRef = "input.attachments";
+    if (action === "press_key") step.key = call.args.key;
+    if (action === "scroll")    step.params = call.args;
+    if (action === "wait")      step.ms = call.args.ms ?? 500;
+    if (action === "assert") { step.kind = call.args.kind; step.value = call.args.value; step.timeoutMs = call.args.timeoutMs; }
+    steps.push(step);
+  }
+
+  const finalInputs = explicitInputs || inputs || inferInputs(steps);
+  const finalOutputs = explicitOutputs || outputs || [];
+
+  const meta = {
+    origin, feature,
+    title: title || `${feature.replace(/-/g, " ")} on ${origin}`,
+    verifiable,
+    preconditions: [],
+    inputs: finalInputs,
+    outputs: finalOutputs,
+    composes: [],
+    next: null,
+    cron: null,
+    last_verified: new Date().toISOString(),
+    success_count: 1,
+    playbook_version: 1,
+    schema_version: 1,
+    tags: [],
+  };
+
+  const existing = await getPlaybook(id);
+  let body;
+  if (existing) {
+    meta.success_count = (existing.meta.success_count || 0) + 1;
+    meta.last_verified = new Date().toISOString();
+    body = updateBodyForRerun(existing.body, steps);
+  } else {
+    body = freshBody(steps);
+  }
+
+  const workflow = { playbookId: id, schemaVersion: 1, steps };
+  await savePlaybook({ id, meta, body, workflow });
+  return {
+    ok: true,
+    playbookId: id,
+    created: !existing,
+    diffSummary: existing ? summarizeDiff(existing.workflow?.steps || [], steps) : "created",
+    path: pathFor(id, ".md"),
+  };
+}
+
+function inferValueRef(intent, value) {
+  if (!intent) return "input.value";
+  // Map common authentication slugs to canonical input names.
+  if (intent.includes("password") || intent.includes("secret")) return "input.password";
+  if (intent.includes("username") || intent.includes("user"))   return "input.username";
+  if (intent.includes("email"))    return "input.email";
+  const base = intent.replace(/-field$|-input$|-button$/g, "").replace(/[^a-z0-9]+/gi, "_");
+  return `input.${base || "value"}`;
+}
+
+function inferInputs(steps) {
+  const seen = new Map();
+  for (const s of steps) {
+    if (s.valueRef && s.valueRef.startsWith("input.")) {
+      const name = s.valueRef.slice("input.".length);
+      if (!seen.has(name)) {
+        const isSecret = /password|token|secret|key/i.test(name);
+        seen.set(name, { name, type: isSecret ? "secret" : "text", required: true });
+      }
+    }
+    if (s.filesRef === "input.attachments" && !seen.has("attachments")) {
+      seen.set("attachments", { name: "attachments", type: "file[]", required: false });
+    }
+  }
+  return [...seen.values()];
+}
+
+function freshBody(steps) {
+  return [
+    "## Summary",
+    "Auto-generated playbook from successful trace.",
+    "",
+    "## Preconditions",
+    "(none recorded)",
+    "",
+    "## Steps",
+    ...steps.map((s, i) => `${i + 1}. ${describeStep(s)}`),
+    "",
+    "## Verification",
+    "Steps completed without throwing.",
+    "",
+    "## Selectors used",
+    "",
+    "| intent | selector |",
+    "|---|---|",
+    "",
+    "## Recent runs",
+    "",
+    `- promoted-${new Date().toISOString()} — first capture, ${steps.length} steps`,
+    "",
+    "## Screenshots",
+    "",
+    "- (none yet)",
+    "",
+  ].join("\n");
+}
+
+function updateBodyForRerun(prevBody, newSteps) {
+  // append a new "Recent runs" entry; keep last 20
+  const lines = prevBody.split("\n");
+  const startIdx = lines.findIndex((l) => l.startsWith("## Recent runs"));
+  if (startIdx < 0) return freshBody(newSteps);
+  const endIdx = lines.findIndex((l, i) => i > startIdx && l.startsWith("## "));
+  const before = lines.slice(0, startIdx + 1);
+  const after = endIdx > 0 ? lines.slice(endIdx) : [""];
+  const prevRuns = lines.slice(startIdx + 1, endIdx > 0 ? endIdx : lines.length).filter((l) => l.trim().startsWith("-"));
+  const newRun = `- promoted-${new Date().toISOString()} — ${newSteps.length} steps`;
+  const trimmed = [newRun, ...prevRuns].slice(0, 20);
+  return [...before, "", ...trimmed, "", ...after].join("\n");
+}
+
+function describeStep(s) {
+  switch (s.action) {
+    case "navigate":  return `Navigate to \`${s.url}\``;
+    case "click":     return `Click intent \`${s.intent || s.selector}\``;
+    case "type":      return `Type \`${s.valueRef}\` into intent \`${s.intent || s.selector}\``;
+    case "press_key": return `Press \`${s.key}\``;
+    case "scroll":    return `Scroll \`${JSON.stringify(s.params)}\``;
+    case "wait":      return `Wait ${s.ms} ms`;
+    case "upload":    return `Upload \`${s.filesRef}\` via intent \`${s.intent || s.selector}\``;
+    case "assert":    return `Assert ${s.kind} = \`${s.value}\``;
+    default:          return JSON.stringify(s);
+  }
+}
+
+function summarizeDiff(prevSteps, newSteps) {
+  const added = newSteps.length - prevSteps.length;
+  if (added > 0) return `added ${added} step(s)`;
+  if (added < 0) return `removed ${Math.abs(added)} step(s)`;
+  return "updated existing steps";
+}

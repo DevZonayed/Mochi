@@ -204,3 +204,42 @@ import { matchPlaybook } from "./src/playbooks.js";
   console.log("✓ Task 4 — matchPlaybook");
   await fs.rm(tmp, { recursive: true, force: true });
 }
+
+import { promoteFromTrace } from "./src/playbooks.js";
+
+{
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-pb-test-"));
+  process.env.MOCHI_PROJECT_DIR = tmp;
+  await initPlaybooks();
+
+  const trace = [
+    { tool: "browser_navigate", args: { url: "https://example.com/login" } },
+    { tool: "browser_type",     args: { intent: "username-field", value: "user@example.com" } },
+    { tool: "browser_type",     args: { intent: "password-field", value: "${SECRET}" } },
+    { tool: "browser_click",    args: { intent: "submit-button" } },
+    { tool: "browser_assert",   args: { kind: "url-contains", value: "/dashboard" } },
+  ];
+
+  const r = await promoteFromTrace({ label: "login", trace, title: "Log in via example.com" });
+  assert.equal(r.created, true);
+  assert.equal(r.playbookId, "example.com/login");
+  const pb = await getPlaybook("example.com/login");
+  assert.equal(pb.meta.origin, "example.com");
+  assert.equal(pb.meta.feature, "login");
+  assert.equal(pb.workflow.steps.length, 5);
+  assert.equal(pb.workflow.steps[1].action, "type");
+  assert.equal(pb.workflow.steps[1].intent, "username-field");
+  // inputs inferred from intents
+  assert.ok(pb.meta.inputs.some((i) => i.name === "username"));
+  assert.ok(pb.meta.inputs.some((i) => i.name === "password"));
+  assert.equal(pb.meta.inputs.find((i) => i.name === "password").type, "secret");
+
+  // second call → updates, not create
+  const trace2 = [...trace, { tool: "browser_screenshot", args: {} }];
+  const r2 = await promoteFromTrace({ label: "login", trace: trace2 });
+  assert.equal(r2.created, false);
+  assert.match(r2.diffSummary, /added|updated/i);
+
+  console.log("✓ Task 5 — promoter");
+  await fs.rm(tmp, { recursive: true, force: true });
+}
