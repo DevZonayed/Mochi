@@ -1,7 +1,7 @@
 {
   "name": "mochi",
   "description": "A browser companion for AI assistants. Bundled MCP tools for Chrome automation, persistent project memory (Continuum chain), and an in-page hint modal — pair with the Mochi Chrome extension.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": {
     "name": "Jonayed Ahamed",
     "email": "dev.jonayed@gmail.com"

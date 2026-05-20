@@ -1,6 +1,6 @@
 {
   "name": "mochi-server",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "private": true,
   "description": "MCP server for the Mochi browser companion — speaks stdio MCP to AI clients and WebSocket to the Chrome extension. Bundled with esbuild into dist/server.bundle.mjs.",
