@@ -14,6 +14,7 @@ import { Memory } from "./memory.js";
 import { SessionTrace } from "./trace.js";
 import { originOf } from "./origin.js";
 import { stage as stageUpload, uploadErr, uploadsDir, gcSession, readIndex } from "./uploads.js";
+import * as playbooks from "./playbooks.js";
 
 // ---------------- shared state (one process = one server) ----------------
 
@@ -608,6 +609,67 @@ export const tools = [
       },
     },
   },
+  {
+    name: "browser_playbook_list",
+    description: "List per-feature playbooks. Filter by origin, feature slug, tag, or verifiable. Returns compact metadata only — call browser_playbook_get for the full body.",
+    inputSchema: { type: "object", properties: {
+      origin:     { type: "string" },
+      feature:    { type: "string" },
+      tag:        { type: "string" },
+      verifiable: { type: "boolean" },
+    } },
+  },
+  {
+    name: "browser_playbook_get",
+    description: "Return one playbook with full meta, body sections, and the underlying workflow JSON.",
+    inputSchema: { type: "object", properties: { id: { type: "string", description: "<origin>/<feature>" } }, required: ["id"] },
+  },
+  {
+    name: "browser_playbook_save",
+    description: "Create or update a playbook. Validates frontmatter and required sections. Use browser_playbook_propose_update for trace-driven authoring.",
+    inputSchema: { type: "object", properties: {
+      id:       { type: "string", description: "<origin>/<feature>" },
+      meta:     { type: "object", description: "Frontmatter fields (origin, feature, title, inputs, outputs, etc.)" },
+      body:     { type: "string", description: "Markdown body with required sections." },
+      workflow: { type: "object", description: "Workflow JSON for replay." },
+    }, required: ["id", "meta", "body"] },
+  },
+  {
+    name: "browser_playbook_delete",
+    description: "Delete a playbook (markdown, workflow JSON, and screenshots).",
+    inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "browser_playbook_match",
+    description: "Find playbooks matching a URL, intent, or task description. Returns top scored matches above threshold.",
+    inputSchema: { type: "object", properties: {
+      url:      { type: "string" },
+      intent:   { type: "string" },
+      taskText: { type: "string" },
+    } },
+  },
+  {
+    name: "browser_playbook_run",
+    description: "Replay a playbook (with self-heal) using the provided inputs. Recursively executes composes/next chains. Returns a verdict + evidence.",
+    inputSchema: { type: "object", properties: {
+      id:     { type: "string" },
+      inputs: { type: "object", description: "Map of input.name -> value (or stashId for files)." },
+    }, required: ["id"] },
+  },
+  {
+    name: "browser_playbook_propose_update",
+    description: "Given a successful trace, create or update the matching playbook. Inputs and steps are inferred from the trace; selectors are tracked via the existing selector cache.",
+    inputSchema: { type: "object", properties: {
+      label:       { type: "string", description: "Suggested feature slug." },
+      title:       { type: "string" },
+      verifiable:  { type: "boolean", default: false },
+      runId:       { type: "string", description: "Optional run id; trace loaded from .continuum/runs/." },
+      trace:       { type: "array",  description: "Or supply trace inline." },
+      inputs:      { type: "array",  description: "Optional explicit input descriptors." },
+      outputs:     { type: "array",  description: "Optional explicit outputs." },
+      screenshots: { type: "array",  items: { type: "string" } },
+    }, required: ["label"] },
+  },
 ];
 
 const TOOL_TO_WS_TYPE = {
@@ -662,6 +724,13 @@ export async function handleToolCall(bridge, params) {
     case "browser_run_history":       return jsonResult(toolRunHistory(args));
     case "browser_workflow_run":      return jsonResult(await toolWorkflowRun(bridge, args));
     case "browser_upload_stage":      return jsonResult(await toolUploadStage(args));
+    case "browser_playbook_list":            return jsonResult(await toolPlaybookList(args));
+    case "browser_playbook_get":             return jsonResult(await toolPlaybookGet(args));
+    case "browser_playbook_save":            return jsonResult(await toolPlaybookSave(args));
+    case "browser_playbook_delete":          return jsonResult(await toolPlaybookDelete(args));
+    case "browser_playbook_match":           return jsonResult(await toolPlaybookMatch(args));
+    case "browser_playbook_propose_update":  return jsonResult(await toolPlaybookProposeUpdate(args));
+    case "browser_playbook_run":             return jsonResult(await toolPlaybookRun(bridge, args));
   }
 
   if (name === "browser_upload_file") {
@@ -1758,3 +1827,120 @@ function jsonResult(value) {
 }
 
 function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+// ---------------- playbook tool handlers ----------------
+
+function unwrapPlaybookError(e) {
+  if (e.playbookError) return { ok: false, error: e.playbookError };
+  return { ok: false, error: { code: "internal", message: String(e?.message ?? e) } };
+}
+
+async function toolPlaybookList(args = {}) {
+  try { return { ok: true, items: await playbooks.listPlaybooks(args) }; }
+  catch (e) { return unwrapPlaybookError(e); }
+}
+async function toolPlaybookGet({ id } = {}) {
+  try {
+    const pb = await playbooks.getPlaybook(id);
+    if (!pb) return { ok: false, error: { code: "playbook-not-found", message: `no playbook ${id}` } };
+    return { ok: true, ...pb };
+  } catch (e) { return unwrapPlaybookError(e); }
+}
+async function toolPlaybookSave(args = {}) {
+  try { return { ok: true, ...(await playbooks.savePlaybook(args)) }; }
+  catch (e) { return unwrapPlaybookError(e); }
+}
+async function toolPlaybookDelete({ id } = {}) {
+  try { return { ok: true, ...(await playbooks.deletePlaybook(id)) }; }
+  catch (e) { return unwrapPlaybookError(e); }
+}
+async function toolPlaybookMatch(args = {}) {
+  try { return { ok: true, matches: await playbooks.matchPlaybook(args) }; }
+  catch (e) { return unwrapPlaybookError(e); }
+}
+async function toolPlaybookProposeUpdate(args = {}) {
+  try {
+    let trace = args.trace;
+    if (!trace && args.runId) {
+      // load trace from .continuum/runs/<runId>.jsonl
+      const fsp = await import("node:fs/promises");
+      const path = await import("path");
+      const runFile = path.join(process.env.MOCHI_PROJECT_DIR || process.cwd(), ".continuum", "runs", `${args.runId}.jsonl`);
+      const raw = await fsp.readFile(runFile, "utf8").catch(() => null);
+      if (!raw) return { ok: false, error: { code: "playbook-validation-failed", message: `runId ${args.runId} not found` } };
+      trace = raw.split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    }
+    return { ok: true, ...(await playbooks.promoteFromTrace({ ...args, trace })) };
+  } catch (e) { return unwrapPlaybookError(e); }
+}
+
+async function toolPlaybookRun(bridge, args = {}) {
+  const { id, inputs = {} } = args;
+  try {
+    const plan = await playbooks.composeResolve(id, inputs);
+    const legs = [];
+    for (const leg of plan.legs) {
+      const legResult = await replayPlaybookLeg(bridge, leg);
+      legs.push(legResult);
+      if (legResult.verdict === "fail") break;
+    }
+    const overall = legs.every((l) => l.verdict === "pass") ? "pass" : "fail";
+    return { ok: true, verdict: overall, legs };
+  } catch (e) { return unwrapPlaybookError(e); }
+}
+
+async function replayPlaybookLeg(bridge, leg) {
+  // Walks the workflow steps using the existing wire actions.
+  const steps = leg.workflow?.steps || [];
+  const startedAt = Date.now();
+  for (const step of steps) {
+    try {
+      await runWorkflowStep(bridge, step, leg.inputs);
+    } catch (e) {
+      return { playbookId: leg.playbookId, verdict: "fail", reason: String(e?.message ?? e), durationMs: Date.now() - startedAt };
+    }
+  }
+  return { playbookId: leg.playbookId, verdict: "pass", durationMs: Date.now() - startedAt };
+}
+
+async function runWorkflowStep(bridge, step, inputs) {
+  const resolveValue = (ref) => {
+    if (!ref) return undefined;
+    if (typeof ref !== "string") return ref;
+    const m = /^input\.(\w+)$/.exec(ref);
+    if (m) return inputs[m[1]];
+    return ref;
+  };
+  switch (step.action) {
+    // Click/type route through runWireTool to preserve the existing intent-cache
+    // + self-heal pipeline that lives inside browser_click / browser_type's
+    // server-side handler (see TOOL_TO_WS_TYPE + the intent-resolution layer).
+    case "click":
+      return runWireTool(bridge, "browser_click", {
+        ref: step.intent || step.selector,
+        ...(step.intent ? { intent: step.intent } : {}),
+      });
+    case "type":
+      return runWireTool(bridge, "browser_type", {
+        ref: step.intent || step.selector,
+        ...(step.intent ? { intent: step.intent } : {}),
+        value: resolveValue(step.valueRef),
+      });
+    case "upload": {
+      const files = resolveValue(step.filesRef);
+      return toolUploadFile(bridge, {
+        ...(step.intent
+          ? { trigger: { ref: step.intent } }
+          : { selector: step.selector }),
+        ...(files ? { files } : {}),
+      });
+    }
+    // Stateless wire actions — no intent layer needed.
+    case "navigate":  return bridge.send("navigate", { url: step.url });
+    case "press_key": return bridge.send("press_key", { key: step.key });
+    case "scroll":    return bridge.send("scroll", step.params || {});
+    case "wait":      return bridge.send("wait",   { ms: step.ms ?? 500 });
+    case "assert":    return bridge.send("assert", { kind: step.kind, value: step.value, timeoutMs: step.timeoutMs });
+    default: throw new Error(`unknown step action: ${step.action}`);
+  }
+}

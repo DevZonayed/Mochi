@@ -13,6 +13,13 @@ const want = [
   "browser_snapshot_node",
   "browser_upload_stage",
   "browser_upload_file",
+  "browser_playbook_list",
+  "browser_playbook_get",
+  "browser_playbook_save",
+  "browser_playbook_delete",
+  "browser_playbook_match",
+  "browser_playbook_run",
+  "browser_playbook_propose_update",
 ];
 const names = tools.map(t => t.name);
 for (const w of want) {
