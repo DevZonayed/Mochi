@@ -1983,32 +1983,61 @@ async function toolPlaybookDiffAccept({ id, runId, steps } = {}) {
 }
 
 async function toolPlaybookRun(bridge, args = {}) {
-  const { id, inputs = {} } = args;
+  const { id, inputs: callerInputs = {} } = args;
   try {
-    const plan = await playbooks.composeResolve(id, inputs);
+    const { resolved, secretValues } = await playbooks.resolveRunInputs(id, callerInputs);
+    const plan = await playbooks.composeResolve(id, resolved);
     const legs = [];
+    const runId = "r" + Math.random().toString(36).slice(2, 8);
     for (const leg of plan.legs) {
-      const legResult = await replayPlaybookLeg(bridge, leg);
+      const legResult = await replayPlaybookLeg(bridge, leg, runId, secretValues);
       legs.push(legResult);
       if (legResult.verdict === "fail") break;
     }
-    const overall = legs.every((l) => l.verdict === "pass") ? "pass" : "fail";
-    return { ok: true, verdict: overall, legs };
+    const overall = legs.every((l) => l.verdict === "pass") ? "pass" : (legs.some((l) => l.verdict === "warn") ? "warn" : "fail");
+    return { ok: true, verdict: overall, runId, legs };
   } catch (e) { return unwrapPlaybookError(e); }
 }
 
-async function replayPlaybookLeg(bridge, leg) {
-  // Walks the workflow steps using the existing wire actions.
+async function replayPlaybookLeg(bridge, leg, runId, secretValues) {
   const steps = leg.workflow?.steps || [];
   const startedAt = Date.now();
-  for (const step of steps) {
+  let stepWarnings = 0;
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
     try {
       await runWorkflowStep(bridge, step, leg.inputs);
+      // Capture + diff screenshot
+      const fsp = await import("node:fs/promises");
+      const pathMod = await import("path");
+      const projectRoot = process.env.MOCHI_PROJECT_DIR || process.cwd();
+      const runDir = pathMod.join(projectRoot, ".continuum", "runs", runId);
+      await fsp.mkdir(runDir, { recursive: true });
+      const stepNum = String(i + 1).padStart(2, "0");
+      const screenshotPath = pathMod.join(runDir, `step-${stepNum}.png`);
+      try {
+        const shotResult = await bridge.send("screenshot", { format: "png" });
+        // bridge returns either { bytesBase64 } or { dataUrl } depending on layer.
+        let base64 = null;
+        if (shotResult?.bytesBase64) base64 = shotResult.bytesBase64;
+        else if (shotResult?.dataUrl && typeof shotResult.dataUrl === "string") {
+          const comma = shotResult.dataUrl.indexOf(",");
+          if (comma >= 0) base64 = shotResult.dataUrl.slice(comma + 1);
+        }
+        if (base64) {
+          await fsp.writeFile(screenshotPath, Buffer.from(base64, "base64"));
+          const diffRes = await playbooks.compareStepScreenshot({ playbookId: leg.playbookId, stepIndex: i + 1, actualPath: screenshotPath });
+          if (diffRes.verdict === "warn") stepWarnings++;
+          if (diffRes.verdict === "fail") {
+            return { playbookId: leg.playbookId, verdict: "fail", reason: `visual diff fail at step ${i + 1}: ${diffRes.reason || diffRes.diff?.toFixed(3)}`, durationMs: Date.now() - startedAt };
+          }
+        }
+      } catch {}
     } catch (e) {
       return { playbookId: leg.playbookId, verdict: "fail", reason: String(e?.message ?? e), durationMs: Date.now() - startedAt };
     }
   }
-  return { playbookId: leg.playbookId, verdict: "pass", durationMs: Date.now() - startedAt };
+  return { playbookId: leg.playbookId, verdict: stepWarnings ? "warn" : "pass", warnings: stepWarnings, durationMs: Date.now() - startedAt };
 }
 
 async function runWorkflowStep(bridge, step, inputs) {

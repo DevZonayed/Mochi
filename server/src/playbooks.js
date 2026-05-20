@@ -3,6 +3,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import yaml from "js-yaml";
+import * as secrets from "./secrets.js";
+import { diffStep } from "./visual-diff.js";
 
 const PLAYBOOK_SCHEMA_VERSION = 1;
 
@@ -349,6 +351,20 @@ export async function promoteFromTrace({ label, title, verifiable = false, trace
     steps.push(step);
   }
 
+  // v1.5: scrub any literal step value that matches a known env-var secret.
+  const env = process.env;
+  const knownSecrets = {};
+  for (const k of Object.keys(env)) {
+    if (/PASSWORD|TOKEN|SECRET|KEY|API/i.test(k) && env[k]) knownSecrets[k] = env[k];
+  }
+  const secretLiteralSet = new Set(Object.values(knownSecrets));
+  for (const step of steps) {
+    if (step.valueRef && step.valueRef.startsWith("input.")) continue;
+    if (typeof step.value === "string" && secretLiteralSet.has(step.value)) {
+      step.value = "[REDACTED]";
+    }
+  }
+
   const finalInputs = explicitInputs || inputs || inferInputs(steps);
   const finalOutputs = explicitOutputs || outputs || [];
 
@@ -515,4 +531,53 @@ function mapInputs(spec, parentInputs) {
     }
   }
   return out;
+}
+
+// ---------------- v1.5: secrets + visual diff helpers ----------------
+
+export async function resolveRunInputs(playbookId, callerInputs) {
+  const pb = await getPlaybook(playbookId);
+  if (!pb) throw playbookErr("playbook-not-found", `no playbook ${playbookId}`);
+  await secrets.initSecrets();
+  const { resolved, missing } = secrets.resolveInputs(pb, callerInputs);
+  if (missing.length) {
+    throw playbookErr("playbook-input-missing", `required secrets unavailable: ${missing.map((m) => m.name).join(", ")}`, { missing });
+  }
+  return { resolved, secretValues: extractSecretValues(pb, resolved) };
+}
+
+function extractSecretValues(pb, resolved) {
+  const out = {};
+  for (const spec of pb.meta?.inputs || []) {
+    if (spec.type === "secret" && typeof resolved[spec.name] === "string") out[spec.name] = resolved[spec.name];
+  }
+  return out;
+}
+
+export function scrubInputsForLog(inputs, secretValues) {
+  const out = {};
+  const valueToName = {};
+  for (const [k, v] of Object.entries(secretValues || {})) {
+    if (typeof v === "string" && v.length) valueToName[v] = k;
+  }
+  for (const [k, v] of Object.entries(inputs || {})) {
+    if (typeof v === "string" && valueToName[v]) out[k] = `[REDACTED:${valueToName[v]}]`;
+    else out[k] = v;
+  }
+  return out;
+}
+
+export async function compareStepScreenshot({ playbookId, stepIndex, actualPath, warnThreshold, failThreshold }) {
+  const pb = await getPlaybook(playbookId);
+  if (!pb) return { verdict: "match", reason: "no-playbook" };
+  const refs = pb.meta.visual_refs || [];
+  const entry = refs.find((r) => r.step === stepIndex);
+  if (!entry) return { verdict: "match", reason: "no-reference" };
+  const originDir = path.join(playbooksDir(), pb.meta.origin);
+  const refPath = path.join(originDir, entry.path);
+  return diffStep({
+    actualPath, refPath,
+    warnThreshold: warnThreshold ?? pb.meta.visual_diff?.warn_threshold ?? 0.05,
+    failThreshold: failThreshold ?? pb.meta.visual_diff?.fail_threshold ?? 0.20,
+  });
 }
