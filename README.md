@@ -136,7 +136,7 @@ at the same time — pick one.
 
 ## Tools (MCP)
 
-51 tools, grouped by purpose.
+54 tools, grouped by purpose.
 
 ### Session + tabs
 
@@ -209,6 +209,9 @@ for the full design.
 | `browser_playbook_secret_check` | Validate that a playbook's `type: secret` inputs are resolvable (env or `.continuum/secrets/`). Returns availability only — never values. |
 | `browser_playbook_seed_from_codebase` | Static-analyze the project's frontend (Next.js / Vite / CRA) and emit draft playbooks per route + form. Solves cold-start on in-house apps. |
 | `browser_playbook_diff_accept` | Bless a run's per-step screenshots as the new visual reference; bumps `playbook_version`. |
+| `browser_playbook_export` | Export one or more playbooks to a single JSON bundle file. Includes embedded base64 screenshots. |
+| `browser_playbook_import` | Import a playbook bundle (file / inline JSON / https URL). Supports `overwrite` + `rewriteOrigin` (e.g., staging → production). |
+| `browser_playbook_dashboard` | Generate a self-contained HTML dashboard from the library; opens in the active browser session. |
 
 **v1.5 capabilities:**
 - **Typed secrets:** `inputs[].type: secret` resolves at runtime from `${env:VAR}` or `${secret:name}` (reads `.continuum/secrets/<name>.txt`, which is `chmod 0700` with an auto-protective `.gitignore`). Secret values never appear in `.continuum/runs/` traces or promoted playbook bodies.
@@ -216,6 +219,15 @@ for the full design.
 - **Visual diff regression:** during `browser_playbook_run`, each step's screenshot is compared (pixelmatch) against the playbook's reference. `warn` between 5–20% diff; `fail` ≥20% (configurable per playbook). Use `browser_playbook_diff_accept` to bless intentional UI changes.
 
 See [`docs/superpowers/specs/2026-05-20-playbooks-v1-5-design.md`](docs/superpowers/specs/2026-05-20-playbooks-v1-5-design.md).
+
+**v2 capabilities (Sharing & Polish):**
+- **1Password integration:** `inputs[].type: secret` refs accept `${1password:vault/item/field}` (alias `${op:...}`). When the `op` CLI is installed and signed in, values are resolved via `op read` at run time and never logged.
+- **Vue + SvelteKit codebase seeding:** Nuxt projects (`nuxt.config.*`) and SvelteKit projects (`svelte.config.*` + `@sveltejs/kit`) are detected by `browser_playbook_seed_from_codebase` in addition to Next.js / Vite / CRA.
+- **Blocked-verdict UX:** `browser_playbook_run` returns `verdict: "blocked"` with a `needs[]` array (one entry per missing required input + a `hint` per source) instead of throwing. The main agent uses the hints to prompt the user (or fix env) and then retries.
+- **Cross-project playbook bundles:** `browser_playbook_export` writes a single JSON containing markdown + workflow + base64 screenshots; `browser_playbook_import` restores them anywhere. Supports overwrite + origin rewrite for staging → production migration.
+- **HTML dashboard:** `/mochi:playbook ui` (or `browser_playbook_dashboard`) generates a self-contained dashboard with search, tag filters, and inline drill-down per playbook.
+
+See [`docs/superpowers/specs/2026-05-20-playbooks-v2-design.md`](docs/superpowers/specs/2026-05-20-playbooks-v2-design.md).
 
 Combined with the bundled `qa-tester` subagent and the smart-router rule in
 `plugins/qa/CLAUDE.md`, the playbook library is your **personal ops memory** —
