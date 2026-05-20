@@ -1,0 +1,26 @@
+<!doctype html><meta charset=utf-8><title>fixture: compose</title>
+<form id=form>
+  <input id=to      data-intent="to-field"      placeholder=to>
+  <input id=subject data-intent="subject-field" placeholder=subject>
+  <textarea id=body data-intent="body-field"   placeholder=body></textarea>
+  <input  id=file   data-intent="attach-field"  type=file style="display:none">
+  <button id=attach data-intent="attach-button" type=button>Attach</button>
+  <span   id=files></span>
+  <button id=send   data-intent="send-button"   type=button>Send</button>
+</form>
+<div id=status></div>
+<div id=preview></div>
+<script>
+attach.onclick = () => file.click();
+file.onchange = () => {
+  for (const f of file.files) { files.textContent += f.name + " "; const img = document.createElement("img"); img.src = URL.createObjectURL(f); preview.appendChild(img); }
+};
+send.onclick = async () => {
+  const fd = new FormData();
+  fd.append("to", to.value); fd.append("subject", subject.value); fd.append("body", body.value);
+  for (const f of file.files) fd.append("file", f);
+  await fetch("/upload", { method: "POST", body: fd });
+  status.textContent = "Message sent.";
+  status.dataset.success = "true";
+};
+</script>

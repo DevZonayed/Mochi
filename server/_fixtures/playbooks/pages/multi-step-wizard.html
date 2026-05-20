@@ -1,0 +1,18 @@
+<!doctype html><meta charset=utf-8><title>fixture: wizard</title>
+<div id=step1>
+  <input id=name data-intent="name-field" placeholder=name>
+  <button id=next1 data-intent="next-button" type=button>Next</button>
+</div>
+<div id=step2 style="display:none">
+  <input id=email data-intent="email-field" placeholder=email>
+  <button id=next2 data-intent="next-button" type=button>Next</button>
+</div>
+<div id=step3 style="display:none">
+  <button id=finish data-intent="finish-button" type=button>Finish</button>
+</div>
+<div id=status></div>
+<script>
+next1.onclick = () => { if (!name.value) return; step1.style.display = "none"; step2.style.display = "block"; };
+next2.onclick = () => { if (!email.value) return; step2.style.display = "none"; step3.style.display = "block"; };
+finish.onclick = async () => { await fetch("/submit", { method: "POST", body: JSON.stringify({ name: name.value, email: email.value }) }); status.textContent = "Wizard complete."; status.dataset.success = "true"; };
+</script>

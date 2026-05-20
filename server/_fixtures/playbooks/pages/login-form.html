@@ -1,0 +1,16 @@
+<!doctype html><meta charset=utf-8><title>fixture: login</title>
+<form id=form>
+  <input id=user data-intent="username-field" placeholder=username>
+  <input id=pass data-intent="password-field" type=password placeholder=password>
+  <button id=submit data-intent="submit-button" type=button>Sign in</button>
+</form>
+<div id=status></div>
+<script>
+submit.onclick = async () => {
+  const u = user.value, p = pass.value;
+  if (!u || !p) { status.textContent = "missing"; return; }
+  await fetch("/submit", { method: "POST", body: JSON.stringify({ u, p }) });
+  status.textContent = "Welcome, " + u;
+  status.dataset.success = "true";
+};
+</script>
