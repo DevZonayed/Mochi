@@ -11,5 +11,8 @@ Parse `$ARGUMENTS` as a verb plus arguments:
 - `run <id> [--input.<name>=<value>] …` → call `browser_playbook_run` with parsed inputs; surface the verdict.
 - `delete <id>` → call `browser_playbook_delete`; confirm.
 - `match <task description>` → call `browser_playbook_match`; render top hits.
+- `seed [--domain=<url>] [--dry-run]` → call `browser_playbook_seed_from_codebase` with the parsed args; render the drafts as a markdown table.
+- `secret-check <id>` → call `browser_playbook_secret_check`; render a table of secret names + availability + hints (never values).
+- `diff accept <id> --run=<runId> [--step=N --step=M]` → call `browser_playbook_diff_accept`; report which steps were blessed and the new playbook_version.
 
 If no verb given, render help with these verbs and an example.

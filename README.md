@@ -136,7 +136,7 @@ at the same time — pick one.
 
 ## Tools (MCP)
 
-48 tools, grouped by purpose.
+51 tools, grouped by purpose.
 
 ### Session + tabs
 
@@ -206,6 +206,16 @@ for the full design.
 | `browser_playbook_match` | Score-match playbooks against a URL, intent, or task description. |
 | `browser_playbook_run` | Replay a playbook (with self-heal) using provided inputs; recursively executes `composes`/`next` chains; returns verdict + evidence. |
 | `browser_playbook_propose_update` | Given a successful trace, create or update the matching playbook. Inputs and steps auto-inferred. |
+| `browser_playbook_secret_check` | Validate that a playbook's `type: secret` inputs are resolvable (env or `.continuum/secrets/`). Returns availability only — never values. |
+| `browser_playbook_seed_from_codebase` | Static-analyze the project's frontend (Next.js / Vite / CRA) and emit draft playbooks per route + form. Solves cold-start on in-house apps. |
+| `browser_playbook_diff_accept` | Bless a run's per-step screenshots as the new visual reference; bumps `playbook_version`. |
+
+**v1.5 capabilities:**
+- **Typed secrets:** `inputs[].type: secret` resolves at runtime from `${env:VAR}` or `${secret:name}` (reads `.continuum/secrets/<name>.txt`, which is `chmod 0700` with an auto-protective `.gitignore`). Secret values never appear in `.continuum/runs/` traces or promoted playbook bodies.
+- **Codebase-derived drafts:** point `browser_playbook_seed_from_codebase` at this project and it walks your routes (Next.js App/Pages Router, Vite, CRA), extracts forms + `data-testid`s + `aria-label`s, and emits draft playbooks per route. Password fields auto-typed as `secret`.
+- **Visual diff regression:** during `browser_playbook_run`, each step's screenshot is compared (pixelmatch) against the playbook's reference. `warn` between 5–20% diff; `fail` ≥20% (configurable per playbook). Use `browser_playbook_diff_accept` to bless intentional UI changes.
+
+See [`docs/superpowers/specs/2026-05-20-playbooks-v1-5-design.md`](docs/superpowers/specs/2026-05-20-playbooks-v1-5-design.md).
 
 Combined with the bundled `qa-tester` subagent and the smart-router rule in
 `plugins/qa/CLAUDE.md`, the playbook library is your **personal ops memory** —

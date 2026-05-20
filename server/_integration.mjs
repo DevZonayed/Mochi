@@ -192,7 +192,7 @@ async function main() {
   logStep("Listing tools");
   const tools = await client.listTools();
   const names = tools.tools.map((t) => t.name);
-  assertEq("total tool count", names.length, 48);
+  assertEq("total tool count", names.length, 51);
   for (const n of [
     "browser_session_health",
     "browser_evaluate",
