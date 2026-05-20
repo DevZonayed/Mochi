@@ -22,3 +22,5 @@ mcp/
 
 # Test coverage
 coverage/
+
+.continuum/secrets/
