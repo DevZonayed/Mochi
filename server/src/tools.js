@@ -15,6 +15,9 @@ import { SessionTrace } from "./trace.js";
 import { originOf } from "./origin.js";
 import { stage as stageUpload, uploadErr, uploadsDir, gcSession, readIndex } from "./uploads.js";
 import * as playbooks from "./playbooks.js";
+import { validatePlaybook as validateSecrets, listAvailableSecrets, initSecrets } from "./secrets.js";
+import { seedFromCodebase } from "./codebase-seed.js";
+import { acceptStepShots, pngSha } from "./visual-diff.js";
 
 // ---------------- shared state (one process = one server) ----------------
 
@@ -670,6 +673,29 @@ export const tools = [
       screenshots: { type: "array",  items: { type: "string" } },
     }, required: ["label"] },
   },
+  {
+    name: "browser_playbook_secret_check",
+    description: "Validate that all `type: secret` inputs of a playbook are resolvable (env var or .continuum/secrets file). Returns availability per secret; never returns values.",
+    inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  },
+  {
+    name: "browser_playbook_seed_from_codebase",
+    description: "Static-analyze the project's frontend (Next.js App/Pages Router, Vite/CRA) and emit draft playbooks per route + form. Drafts have playbook_version=0 and verifiable=false until you run + bless them.",
+    inputSchema: { type: "object", properties: {
+      projectRoot: { type: "string" },
+      domain:      { type: "string", description: "Origin to assign (e.g. 'app.localhost:3000')." },
+      dryRun:      { type: "boolean" },
+    } },
+  },
+  {
+    name: "browser_playbook_diff_accept",
+    description: "Bless a run's per-step screenshots as the new visual reference for a playbook. Updates visual_refs[] hashes and bumps playbook_version.",
+    inputSchema: { type: "object", properties: {
+      id:    { type: "string" },
+      runId: { type: "string" },
+      steps: { type: "array", items: { type: "number" } },
+    }, required: ["id", "runId"] },
+  },
 ];
 
 const TOOL_TO_WS_TYPE = {
@@ -731,6 +757,9 @@ export async function handleToolCall(bridge, params) {
     case "browser_playbook_match":           return jsonResult(await toolPlaybookMatch(args));
     case "browser_playbook_propose_update":  return jsonResult(await toolPlaybookProposeUpdate(args));
     case "browser_playbook_run":             return jsonResult(await toolPlaybookRun(bridge, args));
+    case "browser_playbook_secret_check":       return jsonResult(await toolPlaybookSecretCheck(args));
+    case "browser_playbook_seed_from_codebase": return jsonResult(await toolPlaybookSeedFromCodebase(args));
+    case "browser_playbook_diff_accept":        return jsonResult(await toolPlaybookDiffAccept(args));
   }
 
   if (name === "browser_upload_file") {
@@ -1872,6 +1901,85 @@ async function toolPlaybookProposeUpdate(args = {}) {
     }
     return { ok: true, ...(await playbooks.promoteFromTrace({ ...args, trace })) };
   } catch (e) { return unwrapPlaybookError(e); }
+}
+
+async function toolPlaybookSecretCheck({ id } = {}) {
+  try {
+    const pb = await playbooks.getPlaybook(id);
+    if (!pb) return { ok: false, error: { code: "playbook-not-found", message: `no playbook ${id}` } };
+    await initSecrets();
+    const available = await listAvailableSecrets();
+    const availableNames = new Set(available.map((a) => `${a.source}:${a.name}`));
+    const secrets = (pb.meta.inputs || []).filter((i) => i.type === "secret").map((spec) => {
+      const result = { name: spec.name, ref: spec.ref || null };
+      if (!spec.ref) { result.available = false; result.source = null; result.hint = "no ref configured; pass at run time via inputs"; return result; }
+      const m = /^\$\{([^}]+)\}$/.exec(spec.ref.trim());
+      let kind, key;
+      if (m) {
+        const inner = m[1].trim();
+        const ci = inner.indexOf(":");
+        if (ci < 0) { kind = "env"; key = inner; }
+        else { kind = inner.slice(0, ci); key = inner.slice(ci + 1).trim(); }
+      }
+      const present = kind && availableNames.has(`${kind === "env" ? "env" : "file"}:${kind === "env" ? key : key}`);
+      result.available = !!present;
+      result.source = kind === "env" ? "env" : "secret-file";
+      if (!present) result.hint = kind === "env" ? `set env var ${key}` : `create .continuum/secrets/${key}.txt`;
+      return result;
+    });
+    return { ok: true, id, secrets };
+  } catch (e) {
+    if (e.playbookError) return { ok: false, error: e.playbookError };
+    return { ok: false, error: { code: "internal", message: String(e?.message ?? e) } };
+  }
+}
+
+async function toolPlaybookSeedFromCodebase(args = {}) {
+  try { return { ok: true, ...(await seedFromCodebase(args)) }; }
+  catch (e) {
+    return { ok: false, error: { code: e.message?.startsWith("seed-") ? e.message.split(":")[0] : "internal", message: String(e?.message ?? e) } };
+  }
+}
+
+async function toolPlaybookDiffAccept({ id, runId, steps } = {}) {
+  try {
+    const pb = await playbooks.getPlaybook(id);
+    if (!pb) return { ok: false, error: { code: "playbook-not-found", message: `no playbook ${id}` } };
+    const fsp = await import("node:fs/promises");
+    const pathMod = await import("path");
+    const proj = process.env.MOCHI_PROJECT_DIR || process.cwd();
+    const runDir = pathMod.join(proj, ".continuum", "runs", runId);
+    const featureDir = pathMod.dirname(pathMod.join(proj, ".continuum", "playbooks", id + ".md"));
+    const featureBase = pathMod.basename(id);
+    const refDir = pathMod.join(featureDir, `${featureBase}.screenshots`);
+    let accepted = [];
+    try {
+      accepted = await acceptStepShots({ runDir, refDir, steps });
+    } catch (e) {
+      if (e?.code === "ENOENT") accepted = [];
+      else throw e;
+    }
+    const newRefs = accepted.map((a) => ({ step: a.step, sha: a.sha, path: `${featureBase}.screenshots/step-${String(a.step).padStart(2, "0")}.png` }));
+    const visualRefs = pb.meta.visual_refs || [];
+    const byStep = new Map(visualRefs.map((v) => [v.step, v]));
+    for (const r of newRefs) byStep.set(r.step, r);
+    pb.meta.visual_refs = [...byStep.values()].sort((a, b) => a.step - b.step);
+    if (accepted.length > 0) {
+      pb.meta.playbook_version = (pb.meta.playbook_version || 0) + 1;
+      const newRunNote = `- accepted-${runId} — visual refs updated for steps [${accepted.map((a) => a.step).join(", ")}]`;
+      let body = pb.body || "";
+      const idx = body.indexOf("## Recent runs");
+      if (idx >= 0) {
+        const end = body.indexOf("##", idx + 5);
+        body = body.slice(0, idx + "## Recent runs".length) + "\n\n" + newRunNote + (end > 0 ? "\n\n" + body.slice(end) : "\n");
+      }
+      await playbooks.savePlaybook({ id, meta: pb.meta, body, workflow: pb.workflow });
+    }
+    return { ok: true, id, accepted: newRefs, playbook_version: pb.meta.playbook_version };
+  } catch (e) {
+    if (e.playbookError) return { ok: false, error: e.playbookError };
+    return { ok: false, error: { code: "internal", message: String(e?.message ?? e) } };
+  }
 }
 
 async function toolPlaybookRun(bridge, args = {}) {
