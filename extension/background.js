@@ -923,7 +923,10 @@ async function sessionStart(input = {}, clientId) {
 
   let win, tab;
   if (newWindow) {
-    const opts = { url, focused: true, type: "normal" };
+    // 0.4.1: only force focus on window creation when bringToFront is true (default).
+    // Most callers want a one-time visible signal that the automation window
+    // opened — that's expected and not the bug we fixed in 0.4.1.
+    const opts = { url, focused: !!bringToFront, type: "normal" };
     if (typeof width === "number") opts.width = width;
     if (typeof height === "number") opts.height = height;
     if (typeof left === "number") opts.left = left;
@@ -934,11 +937,11 @@ async function sessionStart(input = {}, clientId) {
   } else {
     try { win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] }); }
     catch { win = await chrome.windows.create({ type: "normal" }); }
-    // active:true by default so the session tab isn't hidden — hidden tabs are
-    // throttled by Chrome (rAF paused, timers ≥1s) and SPAs like React/Cloudflare
-    // never finish rendering. Callers that don't want to steal focus pass
-    // bringToFront:false.
-    tab = await chrome.tabs.create({ url, windowId: win.id, active: !!bringToFront });
+    // ALWAYS create the session tab as `active: true` within its window — that
+    // prevents Chrome's hidden-tab throttling (rAF paused, timers ≥1s) which
+    // breaks SPAs like React/Cloudflare during automation. The OS-level focus
+    // (raising the window) is only requested when bringToFront is true.
+    tab = await chrome.tabs.create({ url, windowId: win.id, active: true });
     if (bringToFront) {
       try { await chrome.windows.update(win.id, { focused: true }); } catch {}
     }
@@ -1040,11 +1043,16 @@ async function forceCleanupClient(clientId) {
   }
 }
 
-async function navigate({ url, tabId, bringToFront = true } = {}, clientId) {
+async function navigate({ url, tabId, bringToFront = false } = {}, clientId) {
   if (!url) throw new Error("url is required");
   const s = getSession(clientId);
   const t = targetTab(s, tabId);
-  await chrome.tabs.update(t, bringToFront ? { url, active: true } : { url });
+  // Always keep the tab `active: true` within its Chrome window — this prevents
+  // Chrome from throttling rAF / timers / SPA rendering on the target tab.
+  // Only raise the entire window to OS foreground when bringToFront is explicit
+  // (default false in 0.4.1 — was true in 0.4.0 and stole user's keyboard focus
+  // on every navigate).
+  await chrome.tabs.update(t, { url, active: true });
   if (bringToFront) {
     try { await chrome.windows.update(s.windowId, { focused: true }); } catch {}
   }

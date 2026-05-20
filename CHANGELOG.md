@@ -8,6 +8,42 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.4.1] — 2026-05-20
+
+### Fixed
+
+- **Focus-steal during automation.** Every `browser_navigate` call in 0.4.0
+  invoked `chrome.windows.update({ focused: true })`, which raises the Chrome
+  automation window to the OS foreground AND captures keyboard focus from
+  whatever the user was working on. Long automation flows became unusable
+  while doing anything else — every navigate would yank your typing target
+  back into Chrome.
+
+  In 0.4.1, `browser_navigate`'s `bringToFront` default changes from `true`
+  to `false`. The tab is still made `active: true` within its Chrome window
+  (so SPAs / React / Cloudflare render correctly — no throttling), but the
+  OS-level window focus is no longer requested on each navigate. Pass
+  `bringToFront: true` explicitly when you want the window forward.
+
+  `browser_session_start`'s default stays `bringToFront: true` — the
+  one-time window creation is expected to be visible. Subsequent navigates
+  in the session are silent.
+
+  **Behavioral impact:** automation now runs in the background and lets you
+  keep working in your IDE / Slack / wherever. Visual users who want to
+  watch a flow can `bringToFront: true` on a specific navigate, or
+  `Cmd+Tab` to the automation window once.
+
+### Notes
+
+- The `bringToFront` parameter in tool schemas was conflating two separate
+  Chrome concepts (tab-active-in-window vs window-focused-on-OS). They're
+  now decoupled internally: tab activity is always on; window OS focus is
+  the opt-in flag.
+- No new MCP tools. Tool count remains 54.
+
+---
+
 ## [0.4.0] — 2026-05-20
 
 Massive feature release. Tool count grows **39 → 54** with two big new

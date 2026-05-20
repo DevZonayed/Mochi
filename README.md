@@ -66,7 +66,7 @@ That's it for the plugin. Then load the Chrome extension once:
 
 ```text
 chrome://extensions → Developer mode → Load unpacked → select
-  ~/.claude/plugins/cache/mochi/mochi/0.4.0/extension
+  ~/.claude/plugins/cache/mochi/mochi/0.4.1/extension
 ```
 
 Restart Claude Code. Press **⌘⇧M** (macOS) or **Ctrl+Shift+M** (other) on

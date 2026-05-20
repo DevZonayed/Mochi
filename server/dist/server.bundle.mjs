@@ -95315,7 +95315,7 @@ var tools = [
   // --- session lifecycle ---
   {
     name: "browser_session_start",
-    description: "Start a new browser session. Creates a Chrome tab group with an initial tab; all subsequent operations are scoped to that group. Pass newWindow=true to spawn a fresh Chrome window so window-resize won't disturb the user's other tabs. By default the session tab is brought to the foreground \u2014 hidden tabs are throttled by Chrome and SPAs may never finish rendering. Pass bringToFront:false to keep the user's current tab in front. Idempotent: ends a previous session first.",
+    description: "Start a new browser session. Creates a Chrome tab group with an initial tab; all subsequent operations are scoped to that group. Pass newWindow=true to spawn a fresh Chrome window so window-resize won't disturb the user's other tabs. By default the new window is brought to OS foreground once (so the user sees automation has started) \u2014 subsequent browser_navigate calls do NOT steal focus (default changed in 0.4.1). Pass bringToFront:false to start fully in the background. Idempotent: ends a previous session first.",
     inputSchema: {
       type: "object",
       properties: {
@@ -95328,7 +95328,7 @@ var tools = [
         left: { type: "number" },
         top: { type: "number" },
         state: { type: "string", enum: ["normal", "maximized", "minimized", "fullscreen"] },
-        bringToFront: { type: "boolean", default: true, description: "Make the session tab the foreground tab in its window. Default true so SPAs aren't throttled by Chrome's hidden-tab budget." },
+        bringToFront: { type: "boolean", default: true, description: "On session start, raise the new window to OS foreground once. The tab is always made active within its window regardless (prevents Chrome throttling). Default true so users see automation has started; pass false for fully-silent background start." },
         visuals: {
           type: "object",
           description: "Visual feedback layer (animated cursor + target ring + HUD). Defaults: enabled with cursor + hud; slowMo:0.",
@@ -95350,13 +95350,13 @@ var tools = [
   // --- navigation + tabs ---
   {
     name: "browser_navigate",
-    description: "Navigate the active session tab to a URL and wait for load. Brings the tab to the foreground by default to avoid Chrome's hidden-tab throttling (SPAs may never finish rendering otherwise). Pass bringToFront:false to keep the user's current tab in front.",
+    description: "Navigate the active session tab to a URL and wait for load. The tab is always made active within its Chrome window (prevents SPA throttling), but by default does NOT raise the Chrome window to OS foreground \u2014 automation no longer steals keyboard focus from whatever you're working on. Pass bringToFront:true to explicitly bring the window forward (useful when you want to watch).",
     inputSchema: {
       type: "object",
       properties: {
         url: { type: "string" },
         tabId: { type: "number" },
-        bringToFront: { type: "boolean", default: true, description: "Make the session tab the foreground tab in its window before loading." }
+        bringToFront: { type: "boolean", default: false, description: "Raise the Chrome window to OS foreground (steals keyboard focus). Default false in 0.4.1+ \u2014 the tab is always made active within its window regardless." }
       },
       required: ["url"]
     }
