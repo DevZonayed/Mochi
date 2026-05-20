@@ -15,7 +15,14 @@
     "./plugins/continuum/commands/recall.md",
     "./plugins/continuum/commands/rename.md",
     "./plugins/continuum/commands/render.md",
-    "./plugins/continuum/commands/status.md"
+    "./plugins/continuum/commands/status.md",
+    "./plugins/qa/commands/qa.md",
+    "./plugins/qa/commands/playbook.md",
+    "./plugins/qa/commands/schedule-playbook.md",
+    "./plugins/qa/commands/unschedule-playbook.md"
+  ],
+  "agents": [
+    "./plugins/qa/agents/qa-tester.md"
   ],
   "hooks": "./plugins/continuum/hooks/hooks.json"
 }
