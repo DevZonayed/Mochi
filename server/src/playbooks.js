@@ -107,7 +107,7 @@ export function validatePlaybook({ meta, body }) {
     return { code: "playbook-validation-failed", details: { issues } };
   }
   if (!meta.origin || typeof meta.origin !== "string")  issues.push("origin: missing or not a string");
-  else if (!/^[a-z0-9.-]+$/.test(meta.origin) && meta.origin !== "_generic") issues.push(`origin: invalid format "${meta.origin}"`);
+  else if (!/^[a-z0-9.:-]+$/.test(meta.origin) && meta.origin !== "_generic") issues.push(`origin: invalid format "${meta.origin}"`);
   if (!meta.feature || typeof meta.feature !== "string") issues.push("feature: missing or not a string");
   else if (!/^[a-z0-9-]+$/.test(meta.feature))           issues.push(`feature: must be kebab-case [a-z0-9-]+, got "${meta.feature}"`);
   else if (meta.feature.length > 40)                     issues.push("feature: max 40 chars");

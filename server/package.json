@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/index.js",
     "build": "esbuild src/index.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/server.bundle.mjs --legal-comments=external --banner:js=\"import{createRequire as ___cr}from'node:module';const require=___cr(import.meta.url);\"",
-    "test": "node _smoke.mjs && node _uploads.test.mjs && node _upload_wire.test.mjs && node _playbooks.test.mjs && node _playbook_wire.test.mjs && node _secrets.test.mjs && node _integration.mjs && node _multi-client.mjs",
+    "test": "node _smoke.mjs && node _uploads.test.mjs && node _upload_wire.test.mjs && node _playbooks.test.mjs && node _playbook_wire.test.mjs && node _secrets.test.mjs && node _codebase_seed.test.mjs && node _integration.mjs && node _multi-client.mjs",
     "test:smoke": "node _smoke.mjs",
     "test:integration": "node _integration.mjs",
     "test:multi": "node _multi-client.mjs",
@@ -19,6 +19,8 @@
     "test:ws": "node src/index.js"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.3",
+    "@babel/traverse": "^7.29.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "js-yaml": "^4.1.1",
     "undici": "^7.25.0",
