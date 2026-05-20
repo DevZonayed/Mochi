@@ -88,3 +88,26 @@ await fs.rm(tmp, { recursive: true, force: true });
   console.log("✓ Nuxt detector");
   await fs.rm(tmp, { recursive: true, force: true });
 }
+
+{
+  const fixtureRoot = path.join(__dirname, "_fixtures", "codebase", "svelte-app");
+  const fw = await detectFramework(fixtureRoot);
+  assert.equal(fw.kind, "sveltekit");
+
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-seed-svelte-"));
+  process.env.MOCHI_PROJECT_DIR = tmp;
+  await initPlaybooks();
+
+  const r = await seedFromCodebase({ projectRoot: fixtureRoot, domain: "svelte.example.com" });
+  assert.equal(r.framework, "sveltekit");
+  assert.ok(r.drafts.length >= 1);
+  const login = r.drafts.find((d) => d.id === "svelte.example.com/login");
+  assert.ok(login, "expected svelte.example.com/login draft");
+
+  const pb = await getPlaybook("svelte.example.com/login");
+  assert.ok(pb);
+  const pwd = pb.meta.inputs.find((i) => i.name === "password");
+  assert.equal(pwd.type, "secret");
+  console.log("✓ SvelteKit detector");
+  await fs.rm(tmp, { recursive: true, force: true });
+}
