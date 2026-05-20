@@ -14,5 +14,8 @@ Parse `$ARGUMENTS` as a verb plus arguments:
 - `seed [--domain=<url>] [--dry-run]` → call `browser_playbook_seed_from_codebase` with the parsed args; render the drafts as a markdown table.
 - `secret-check <id>` → call `browser_playbook_secret_check`; render a table of secret names + availability + hints (never values).
 - `diff accept <id> --run=<runId> [--step=N --step=M]` → call `browser_playbook_diff_accept`; report which steps were blessed and the new playbook_version.
+- `export [--ids=<id1,id2>] [--origin=<host>] [--tag=<tag>] [--out=<path>]` → call `browser_playbook_export`; report bundle path + size.
+- `import <path-or-url> [--overwrite] [--rewrite-origin=<host>]` → call `browser_playbook_import`; render the imported/skipped lists.
+- `ui` → call `browser_playbook_dashboard` (default `open: true`); the dashboard opens in the user's active browser session.
 
 If no verb given, render help with these verbs and an example.

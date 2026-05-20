@@ -28,3 +28,14 @@ When the user asks you to do a browser interaction, FIRST classify:
 Treat each `.continuum/playbooks/<origin>/<feature>.md` as a contract. Playbook frontmatter declares `inputs[]` with types — `email`, `text`, `markdown`, `file[]`, `secret`, etc. When you see `type: file[]` or `type: image` in inputs, the playbook needs files: call `browser_upload_stage` first to get a `stashId`, then pass it to `browser_upload_file` (or `browser_playbook_run` will plumb it via the `upload` step automatically).
 
 Secrets (`type: secret`) are NEVER logged in traces or proposed playbook bodies. Resolve them from `process.env.<NAME_UPPERCASE>` at run time; never write the value into the playbook.
+
+## Handling `blocked` verdicts from `browser_playbook_run`
+
+If the tool returns `{ ok: true, verdict: "blocked", needs: [...] }`, do NOT call the tool again until you've handled each entry in `needs[]`:
+
+- `source: "env"` — tell the user the env var to set (the `hint` field contains the exact name), then wait for confirmation before retrying.
+- `source: "1password"` — tell the user to ensure `op` is signed in (`op signin`). If they have multiple accounts: `op signin --account=<acct>`.
+- `source: "file"` — instruct the user to create the secret file (path in `hint`); never offer to write secret values via `Write` yourself.
+- `source: null` — ask the user for the value directly and pass it via `inputs.<name>` on retry.
+
+Once the missing values are resolvable, re-invoke `browser_playbook_run` with the now-available inputs.
