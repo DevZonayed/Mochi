@@ -3,9 +3,45 @@
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
+import { execSync as _execSync } from "node:child_process";
 
 function projectDir() { return process.env.MOCHI_PROJECT_DIR || process.cwd(); }
 export function secretsDir() { return path.join(projectDir(), ".continuum", "secrets"); }
+
+let _execForTesting = null;
+export function __setExecForTesting(fn) {
+  _execForTesting = fn;
+  _opAvailableCache = { checkedAt: 0, available: false };
+}
+export function __clearExecForTesting() {
+  _execForTesting = null;
+  _opAvailableCache = { checkedAt: 0, available: false };
+}
+function exec(cmd, opts) {
+  if (_execForTesting) return _execForTesting(cmd, opts);
+  return _execSync(cmd, opts);
+}
+
+let _opAvailableCache = { checkedAt: 0, available: false };
+function opAvailable() {
+  const now = Date.now();
+  if (now - _opAvailableCache.checkedAt < 60_000) return _opAvailableCache.available;
+  try {
+    exec("op --version", { stdio: ["ignore", "pipe", "ignore"], timeout: 1500 });
+    _opAvailableCache = { checkedAt: now, available: true };
+  } catch {
+    _opAvailableCache = { checkedAt: now, available: false };
+  }
+  return _opAvailableCache.available;
+}
+
+function resolveOpRef(refPath) {
+  if (!opAvailable()) return null;
+  try {
+    const out = exec(`op read "op://${refPath}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 });
+    return String(out).replace(/\r?\n$/, "");
+  } catch { return null; }
+}
 
 const REF_PATTERN = /^\$\{([^}]+)\}$/;
 
@@ -63,6 +99,9 @@ export function resolveRef(ref) {
       return raw.replace(/\r?\n$/, "");
     } catch { return null; }
   }
+  if (kind === "1password" || kind === "op") {
+    return resolveOpRef(name);
+  }
   throw new SecretError("secret-ref-syntax", `unknown kind "${kind}"; want env or secret`);
 }
 
@@ -90,6 +129,7 @@ function refSource(ref) {
   if (!m) return null;
   const inner = m[1].trim();
   if (inner.startsWith("secret:")) return "file";
+  if (inner.startsWith("1password:") || inner.startsWith("op:")) return "1password";
   return "env";
 }
 
@@ -136,5 +176,8 @@ export async function listAvailableSecrets() {
       if (f.endsWith(".txt")) out.push({ name: f.slice(0, -4), source: "file" });
     }
   } catch {}
+  if (opAvailable()) {
+    out.push({ name: "<1password>", source: "1password" });
+  }
   return out;
 }

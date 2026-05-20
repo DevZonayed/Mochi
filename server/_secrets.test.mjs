@@ -72,3 +72,30 @@ delete process.env.GMAIL_PASSWORD;
 
 console.log("✓ secrets tests");
 await fs.rm(tmp, { recursive: true, force: true });
+
+import { resolveRef as _resolveRef, __setExecForTesting, __clearExecForTesting, listAvailableSecrets as listAvail2 } from "./src/secrets.js";
+
+// 1Password integration tests
+{
+  // op installed and successful
+  __setExecForTesting((cmd) => {
+    if (cmd.startsWith('op read "op://Personal/Gmail/password"')) return "supersecret\n";
+    if (cmd.startsWith('op read "op://Work/AWS/access_key_id"')) return "AKIA…\n";
+    if (cmd.startsWith('op read')) { const e = new Error("not found"); e.status = 1; throw e; }
+    if (cmd.includes("--version")) return "2.0.0\n";
+    throw new Error("unknown cmd: " + cmd);
+  });
+  assert.equal(_resolveRef("${1password:Personal/Gmail/password}"), "supersecret");
+  assert.equal(_resolveRef("${op:Work/AWS/access_key_id}"), "AKIA…");
+  assert.equal(_resolveRef("${op:Personal/Nonexistent/password}"), null);
+
+  // op not installed
+  __setExecForTesting((cmd) => {
+    if (cmd.includes("--version")) { const e = new Error("ENOENT"); e.code = "ENOENT"; throw e; }
+    throw new Error("op missing");
+  });
+  assert.equal(_resolveRef("${1password:any/thing/here}"), null);
+
+  __clearExecForTesting();
+  console.log("✓ 1Password ref resolution");
+}
