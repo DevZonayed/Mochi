@@ -152,3 +152,115 @@ function deepEqual(a, b) {
   if (ak.length !== bk.length) return false;
   return ak.every((k) => deepEqual(a[k], b[k]));
 }
+
+// ---------------- CRUD ----------------
+
+function pathFor(id, ext = ".md") {
+  const [origin, feature] = id.split("/");
+  return path.join(playbooksDir(), origin, feature + ext);
+}
+
+let writeMutex = Promise.resolve();
+async function withMutex(fn) {
+  const prev = writeMutex;
+  let release;
+  writeMutex = new Promise((r) => { release = r; });
+  try { await prev; return await fn(); }
+  finally { release(); }
+}
+
+async function atomicWrite(p, content) {
+  const tmp = p + ".tmp." + process.pid + "." + Date.now();
+  await fs.mkdir(path.dirname(p), { recursive: true });
+  await fs.writeFile(tmp, content);
+  await fs.rename(tmp, p);
+}
+
+export async function savePlaybook({ id, meta, body, workflow }) {
+  await initPlaybooks();
+  if (!id || !id.includes("/")) throw playbookErr("playbook-id-invalid", "id must be <origin>/<feature>", { id });
+  // Validate the playbook itself first — if the feature/origin slug is malformed,
+  // emit playbook-validation-failed (clearer than an id-mismatch).
+  const err = validatePlaybook({ meta, body });
+  if (err) throw playbookErr(err.code, "playbook failed validation", err.details);
+  if (meta.origin + "/" + meta.feature !== id) {
+    throw playbookErr("playbook-id-mismatch", "id does not match meta.origin/meta.feature", { id, expected: meta.origin + "/" + meta.feature });
+  }
+
+  const md = serializePlaybook({ meta, body });
+  await withMutex(async () => {
+    await atomicWrite(pathFor(id, ".md"), md);
+    if (workflow) await atomicWrite(pathFor(id, ".workflow.json"), JSON.stringify(workflow, null, 2));
+    await rebuildIndex();
+  });
+  return { ok: true, path: pathFor(id, ".md") };
+}
+
+export async function getPlaybook(id) {
+  try {
+    const md = await fs.readFile(pathFor(id, ".md"), "utf8");
+    const parsed = parsePlaybook(md);
+    let workflow = null;
+    try { workflow = JSON.parse(await fs.readFile(pathFor(id, ".workflow.json"), "utf8")); }
+    catch {}
+    return { id, ...parsed, workflow };
+  } catch (e) {
+    if (e.code === "ENOENT") return null;
+    throw e;
+  }
+}
+
+export async function listPlaybooks({ origin, feature, tag, verifiable } = {}) {
+  await initPlaybooks();
+  const raw = JSON.parse(await fs.readFile(indexPath(), "utf8"));
+  return raw.playbooks.filter((p) => {
+    if (origin && p.origin !== origin) return false;
+    if (feature && p.feature !== feature) return false;
+    if (tag && !(p.tags || []).includes(tag)) return false;
+    if (verifiable !== undefined && p.verifiable !== verifiable) return false;
+    return true;
+  });
+}
+
+export async function deletePlaybook(id) {
+  await withMutex(async () => {
+    try { await fs.unlink(pathFor(id, ".md")); } catch {}
+    try { await fs.unlink(pathFor(id, ".workflow.json")); } catch {}
+    try { await fs.rm(pathFor(id, ".screenshots"), { recursive: true, force: true }); } catch {}
+    await rebuildIndex();
+  });
+  return { ok: true };
+}
+
+export async function rebuildIndex() {
+  await initPlaybooks();
+  const entries = [];
+  const origins = await fs.readdir(playbooksDir());
+  for (const origin of origins) {
+    if (origin === "inbox" || origin === "index.json" || origin.startsWith(".")) continue;
+    const originPath = path.join(playbooksDir(), origin);
+    let st; try { st = await fs.stat(originPath); } catch { continue; }
+    if (!st.isDirectory()) continue;
+    const files = await fs.readdir(originPath);
+    for (const f of files) {
+      if (!f.endsWith(".md")) continue;
+      const md = await fs.readFile(path.join(originPath, f), "utf8").catch(() => null);
+      if (!md) continue;
+      let parsed; try { parsed = parsePlaybook(md); } catch { continue; }
+      const m = parsed.meta;
+      entries.push({
+        id: `${m.origin}/${m.feature}`,
+        origin: m.origin,
+        feature: m.feature,
+        title: m.title || m.feature,
+        verifiable: !!m.verifiable,
+        inputs: (m.inputs || []).map((x) => x.name),
+        success_count: m.success_count || 0,
+        last_verified: m.last_verified || null,
+        tags: m.tags || [],
+      });
+    }
+  }
+  await atomicWrite(indexPath(), JSON.stringify({ version: 1, playbooks: entries }, null, 2));
+  return { entries: entries.length };
+}

@@ -114,3 +114,58 @@ import { validatePlaybook, playbookErr } from "./src/playbooks.js";
 
   console.log("✓ Task 2 — validation");
 }
+
+import { savePlaybook, getPlaybook, listPlaybooks, deletePlaybook, rebuildIndex } from "./src/playbooks.js";
+
+{
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-pb-test-"));
+  process.env.MOCHI_PROJECT_DIR = tmp;
+  await initPlaybooks();
+
+  const meta = {
+    origin: "mail.google.com",
+    feature: "send-email",
+    title: "Send email",
+    verifiable: true,
+    preconditions: [],
+    inputs: [{ name: "to", type: "email", required: true }],
+    outputs: [],
+    composes: [],
+    next: null,
+    cron: null,
+    last_verified: "2026-05-20T10:00:00Z",
+    success_count: 0,
+    playbook_version: 1,
+    schema_version: 1,
+  };
+  const body = "## Summary\nSend.\n## Preconditions\nLogged-in.\n## Steps\n1. compose.\n## Verification\nToast.\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n";
+  const workflow = { playbookId: "mail.google.com/send-email", schemaVersion: 1, steps: [{ action: "navigate", url: "https://mail.google.com" }] };
+
+  const saved = await savePlaybook({ id: "mail.google.com/send-email", meta, body, workflow });
+  assert.equal(saved.ok, true);
+  assert.ok(saved.path.endsWith("send-email.md"));
+
+  const got = await getPlaybook("mail.google.com/send-email");
+  assert.equal(got.meta.feature, "send-email");
+  assert.equal(got.workflow.steps[0].action, "navigate");
+
+  const list = await listPlaybooks({ verifiable: true });
+  assert.equal(list.length, 1);
+  assert.equal(list[0].id, "mail.google.com/send-email");
+
+  // invalid playbook rejected
+  await assert.rejects(savePlaybook({ id: "mail.google.com/send-email", meta: { ...meta, feature: "BAD!" }, body, workflow }), /playbook-validation-failed/);
+  // id mismatch rejected
+  await assert.rejects(savePlaybook({ id: "other.com/x", meta, body, workflow }), /playbook-id-mismatch/);
+
+  await deletePlaybook("mail.google.com/send-email");
+  const list2 = await listPlaybooks({});
+  assert.equal(list2.length, 0);
+
+  // rebuildIndex idempotence
+  const r = await rebuildIndex();
+  assert.equal(r.entries, 0);
+
+  console.log("✓ Task 3 — CRUD");
+  await fs.rm(tmp, { recursive: true, force: true });
+}
