@@ -169,3 +169,38 @@ import { savePlaybook, getPlaybook, listPlaybooks, deletePlaybook, rebuildIndex 
   console.log("✓ Task 3 — CRUD");
   await fs.rm(tmp, { recursive: true, force: true });
 }
+
+import { matchPlaybook } from "./src/playbooks.js";
+
+{
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-pb-test-"));
+  process.env.MOCHI_PROJECT_DIR = tmp;
+  await initPlaybooks();
+
+  await savePlaybook({
+    id: "mail.google.com/send-email",
+    meta: { origin: "mail.google.com", feature: "send-email", inputs: [], outputs: [], verifiable: true, tags: ["email"] },
+    body: "## Summary\nx\n## Preconditions\nx\n## Steps\nNavigate https://mail.google.com/mail/u/0/#inbox\n## Verification\nx\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n",
+    workflow: { steps: [{ action: "navigate", url: "https://mail.google.com/mail/u/0/#inbox" }] },
+  });
+  await savePlaybook({
+    id: "twitter.com/post",
+    meta: { origin: "twitter.com", feature: "post", inputs: [], outputs: [], verifiable: false, tags: ["social"] },
+    body: "## Summary\nx\n## Preconditions\nx\n## Steps\nx\n## Verification\nx\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n",
+    workflow: null,
+  });
+
+  const m1 = await matchPlaybook({ url: "https://mail.google.com/mail/u/0/#inbox", taskText: "send an email" });
+  assert.ok(m1.length >= 1);
+  assert.equal(m1[0].playbookId, "mail.google.com/send-email");
+  assert.ok(m1[0].score >= 50);
+
+  const m2 = await matchPlaybook({ url: "https://unrelated.com" });
+  assert.equal(m2.length, 0); // below threshold
+
+  const m3 = await matchPlaybook({ taskText: "social post on twitter", url: null });
+  assert.ok(m3.some((x) => x.playbookId === "twitter.com/post"));
+
+  console.log("✓ Task 4 — matchPlaybook");
+  await fs.rm(tmp, { recursive: true, force: true });
+}

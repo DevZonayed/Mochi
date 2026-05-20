@@ -264,3 +264,45 @@ export async function rebuildIndex() {
   await atomicWrite(indexPath(), JSON.stringify({ version: 1, playbooks: entries }, null, 2));
   return { entries: entries.length };
 }
+
+// ---------------- matchPlaybook ----------------
+
+const MATCH_THRESHOLD = 30;
+
+export async function matchPlaybook({ url, intent, taskText } = {}) {
+  const entries = await listPlaybooks({});
+  const u = url ? safeUrl(url) : null;
+  const text = (taskText || "").toLowerCase();
+  const stems = tokenize(text);
+  const results = [];
+  for (const e of entries) {
+    let score = 0;
+    const reasons = [];
+    if (u && e.origin === u.hostname) { score += 50; reasons.push("origin-match"); }
+    if (taskText) {
+      const featStems = tokenize(e.feature.replace(/-/g, " "));
+      const overlap = featStems.filter((t) => stems.includes(t)).length;
+      if (overlap) { score += overlap * 10; reasons.push(`feature-token-overlap:${overlap}`); }
+      const titleStems = tokenize(e.title || "");
+      const tOverlap = titleStems.filter((t) => stems.includes(t)).length;
+      if (tOverlap) { score += tOverlap * 5; reasons.push(`title-token-overlap:${tOverlap}`); }
+      // Origin hostname token match (e.g. "twitter" in "twitter.com" vs "post on twitter").
+      const origStems = tokenize(e.origin.replace(/[.-]/g, " "));
+      const oOverlap = origStems.filter((t) => stems.includes(t)).length;
+      if (oOverlap) { score += oOverlap * 10; reasons.push(`origin-token-overlap:${oOverlap}`); }
+      for (const tag of e.tags || []) {
+        if (stems.includes(tag.toLowerCase())) { score += 10; reasons.push(`tag-match:${tag}`); }
+      }
+    }
+    if (intent && e.feature.includes(intent)) { score += 15; reasons.push("intent-match"); }
+    if (score >= MATCH_THRESHOLD) results.push({ playbookId: e.id, score, reason: reasons.join(", ") });
+  }
+  results.sort((a, b) => b.score - a.score);
+  return results.slice(0, 5);
+}
+
+function safeUrl(s) { try { return new URL(s); } catch { return null; } }
+function tokenize(s) {
+  return (s || "").toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 2 && !STOPWORDS.has(t));
+}
+const STOPWORDS = new Set(["the","and","for","with","from","that","this","into","onto","when","then","than","but","not","you"]);
