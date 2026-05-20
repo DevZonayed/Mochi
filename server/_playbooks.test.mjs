@@ -243,3 +243,40 @@ import { promoteFromTrace } from "./src/playbooks.js";
   console.log("✓ Task 5 — promoter");
   await fs.rm(tmp, { recursive: true, force: true });
 }
+
+import { composeResolve } from "./src/playbooks.js";
+
+{
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-pb-test-"));
+  process.env.MOCHI_PROJECT_DIR = tmp;
+  await initPlaybooks();
+
+  // single playbook
+  await savePlaybook({
+    id: "twitter.com/post", meta: { origin: "twitter.com", feature: "post", inputs: [{ name: "text", type: "text", required: true }], outputs: [{ name: "postUrl", type: "url" }], verifiable: false }, body: "## Summary\nx\n## Preconditions\nx\n## Steps\nx\n## Verification\nx\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n", workflow: { steps: [] },
+  });
+  // parent composes child
+  await savePlaybook({
+    id: "blog.example.com/cross-post", meta: { origin: "blog.example.com", feature: "cross-post", inputs: [{ name: "text", type: "text", required: true }], outputs: [], verifiable: false, composes: [{ id: "twitter.com/post", inputs: { text: "${input.text}" } }] }, body: "## Summary\nx\n## Preconditions\nx\n## Steps\nx\n## Verification\nx\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n", workflow: { steps: [] },
+  });
+
+  const plan = await composeResolve("blog.example.com/cross-post", { text: "hi" });
+  assert.equal(plan.legs.length, 2); // self + composed
+  assert.equal(plan.legs[1].playbookId, "twitter.com/post");
+  assert.equal(plan.legs[1].inputs.text, "hi");
+
+  // missing input
+  await assert.rejects(composeResolve("twitter.com/post", {}), /playbook-input-missing/);
+
+  // cycle
+  await savePlaybook({
+    id: "cycle.com/a", meta: { origin: "cycle.com", feature: "a", inputs: [], outputs: [], verifiable: false, composes: [{ id: "cycle.com/b", inputs: {} }] }, body: "## Summary\nx\n## Preconditions\nx\n## Steps\nx\n## Verification\nx\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n", workflow: { steps: [] },
+  });
+  await savePlaybook({
+    id: "cycle.com/b", meta: { origin: "cycle.com", feature: "b", inputs: [], outputs: [], verifiable: false, composes: [{ id: "cycle.com/a", inputs: {} }] }, body: "## Summary\nx\n## Preconditions\nx\n## Steps\nx\n## Verification\nx\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n", workflow: { steps: [] },
+  });
+  await assert.rejects(composeResolve("cycle.com/a", {}), /playbook-compose-cycle/);
+
+  console.log("✓ Task 6 — composeResolve");
+  await fs.rm(tmp, { recursive: true, force: true });
+}

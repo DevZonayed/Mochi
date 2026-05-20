@@ -481,3 +481,38 @@ function summarizeDiff(prevSteps, newSteps) {
   if (added < 0) return `removed ${Math.abs(added)} step(s)`;
   return "updated existing steps";
 }
+
+// ---------------- composeResolve ----------------
+
+export async function composeResolve(playbookId, inputs, _stack = new Set()) {
+  if (_stack.has(playbookId)) {
+    throw playbookErr("playbook-compose-cycle", "cycle detected", { path: [..._stack, playbookId] });
+  }
+  const pb = await getPlaybook(playbookId);
+  if (!pb) throw playbookErr("playbook-not-found", `no playbook ${playbookId}`);
+  for (const inSpec of pb.meta.inputs || []) {
+    if (inSpec.required && (inputs[inSpec.name] === undefined || inputs[inSpec.name] === null)) {
+      throw playbookErr("playbook-input-missing", `${playbookId} requires input "${inSpec.name}"`, { playbookId, missing: inSpec.name });
+    }
+  }
+  const legs = [{ playbookId, inputs, meta: pb.meta, workflow: pb.workflow }];
+  const newStack = new Set([..._stack, playbookId]);
+  for (const c of pb.meta.composes || []) {
+    const mappedInputs = mapInputs(c.inputs || {}, inputs);
+    const sub = await composeResolve(c.id, mappedInputs, newStack);
+    legs.push(...sub.legs);
+  }
+  return { legs };
+}
+
+function mapInputs(spec, parentInputs) {
+  const out = {};
+  for (const [k, v] of Object.entries(spec || {})) {
+    if (typeof v === "string") {
+      out[k] = v.replace(/\$\{input\.([\w$]+)\}/g, (_, name) => parentInputs[name] ?? "");
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
