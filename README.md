@@ -136,7 +136,7 @@ at the same time — pick one.
 
 ## Tools (MCP)
 
-41 tools, grouped by purpose.
+48 tools, grouped by purpose.
 
 ### Session + tabs
 
@@ -193,6 +193,35 @@ Sources can be inlined into `browser_upload_file` or pre-staged with
 ten sites is fetched/decoded once and reused. Frame-traversal handles
 same-origin iframes automatically. See
 [`docs/superpowers/specs/2026-05-19-browser-file-upload-design.md`](docs/superpowers/specs/2026-05-19-browser-file-upload-design.md)
+for the full design.
+
+### Playbooks (personal ops memory)
+
+| Tool | What it does |
+|---|---|
+| `browser_playbook_list` | List playbooks under `.continuum/playbooks/`, filter by origin/tag/verifiable. |
+| `browser_playbook_get` | Return one playbook with meta + body sections + workflow JSON. |
+| `browser_playbook_save` | Create/update a playbook (validates frontmatter and required sections). |
+| `browser_playbook_delete` | Remove a playbook + workflow + screenshots. |
+| `browser_playbook_match` | Score-match playbooks against a URL, intent, or task description. |
+| `browser_playbook_run` | Replay a playbook (with self-heal) using provided inputs; recursively executes `composes`/`next` chains; returns verdict + evidence. |
+| `browser_playbook_propose_update` | Given a successful trace, create or update the matching playbook. Inputs and steps auto-inferred. |
+
+Combined with the bundled `qa-tester` subagent and the smart-router rule in
+`plugins/qa/CLAUDE.md`, the playbook library is your **personal ops memory** —
+each browser task you do once becomes replayable, chainable, and
+scheduleable. Main Claude routes verifiable + repeatable tasks to the
+isolated `qa-tester` subagent (which returns a pass/fail verdict + evidence)
+while operational tasks (multi-step, decisive, may need mid-flow input)
+stay in the main conversation and use playbooks as guidance.
+
+**Slash commands:**
+- `/qa <task>` — dispatch the qa-tester subagent for a verifiable browser task.
+- `/mochi:playbook list|show|run|delete|match [args]` — manage playbooks.
+- `/mochi:schedule-playbook <id>` — wire up cron via the host's `schedule` skill.
+- `/mochi:unschedule-playbook <id>` — cancel a scheduled playbook.
+
+See [`docs/superpowers/specs/2026-05-20-personal-ops-playbooks-design.md`](docs/superpowers/specs/2026-05-20-personal-ops-playbooks-design.md)
 for the full design.
 
 ### Memory: selector cache (per origin)
