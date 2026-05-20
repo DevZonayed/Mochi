@@ -86,6 +86,56 @@ export function serializePlaybook({ meta, body, _rawFront }) {
   return `---\n${front}\n---\n${body}`;
 }
 
+const VALID_INPUT_TYPES = new Set([
+  "text", "email", "url", "markdown", "password",
+  "file", "file[]", "image", "image[]",
+  "secret", "enum", "int", "bool",
+]);
+
+const REQUIRED_SECTIONS = ["summary", "preconditions", "steps", "verification", "selectors_used", "recent_runs", "screenshots"];
+
+export function playbookErr(code, message, details) {
+  const e = new Error(`${code}: ${message}`);
+  e.playbookError = { code, message, details };
+  return e;
+}
+
+export function validatePlaybook({ meta, body }) {
+  const issues = [];
+  if (!meta || typeof meta !== "object") {
+    issues.push("frontmatter missing or origin missing");
+    return { code: "playbook-validation-failed", details: { issues } };
+  }
+  if (!meta.origin || typeof meta.origin !== "string")  issues.push("origin: missing or not a string");
+  else if (!/^[a-z0-9.-]+$/.test(meta.origin) && meta.origin !== "_generic") issues.push(`origin: invalid format "${meta.origin}"`);
+  if (!meta.feature || typeof meta.feature !== "string") issues.push("feature: missing or not a string");
+  else if (!/^[a-z0-9-]+$/.test(meta.feature))           issues.push(`feature: must be kebab-case [a-z0-9-]+, got "${meta.feature}"`);
+  else if (meta.feature.length > 40)                     issues.push("feature: max 40 chars");
+
+  for (const input of meta.inputs ?? []) {
+    if (!input.name || !/^[a-zA-Z_$][\w$]*$/.test(input.name)) issues.push(`inputs[].name: invalid identifier "${input.name}"`);
+    if (!input.type || !VALID_INPUT_TYPES.has(input.type))     issues.push(`inputs[].type: must be one of ${[...VALID_INPUT_TYPES].join(",")}, got "${input.type}"`);
+  }
+  if (meta.cron && typeof meta.cron === "string" && !isValidCron(meta.cron)) {
+    issues.push(`cron: invalid cron expression "${meta.cron}"`);
+  }
+
+  // body section presence
+  if (typeof body === "string") {
+    for (const sec of REQUIRED_SECTIONS) {
+      const heading = "## " + sec.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).replace(/Selectors Used/, "Selectors used").replace(/Recent Runs/, "Recent runs");
+      if (!body.includes(heading)) issues.push(`section missing: ${heading}`);
+    }
+  }
+  return issues.length ? { code: "playbook-validation-failed", details: { issues } } : null;
+}
+
+function isValidCron(expr) {
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  return parts.every((p) => /^[\d*,/-]+$/.test(p));
+}
+
 function deepEqual(a, b) {
   if (a === b) return true;
   if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();

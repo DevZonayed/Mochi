@@ -75,3 +75,42 @@ assert.equal(round, md, "round-trip serialization should be byte-identical");
 
 console.log("✓ Task 1 — parse + round-trip");
 await fs.rm(tmp, { recursive: true, force: true });
+
+import { validatePlaybook, playbookErr } from "./src/playbooks.js";
+
+{
+  // missing required fields
+  let err = validatePlaybook({ meta: {}, body: "" });
+  assert.equal(err.code, "playbook-validation-failed");
+  assert.ok(err.details.issues.some((x) => x.includes("origin")));
+
+  // bad id shape
+  err = validatePlaybook({ meta: { origin: "Bad Origin!!", feature: "send-email" }, body: "## Summary\nX\n## Preconditions\nY\n## Steps\nZ\n## Verification\nW\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n" });
+  assert.equal(err.code, "playbook-validation-failed");
+  assert.ok(err.details.issues.some((x) => x.toLowerCase().includes("origin")));
+
+  // bad feature slug
+  err = validatePlaybook({ meta: { origin: "mail.google.com", feature: "Send Email" }, body: "## Summary\nX\n## Preconditions\nY\n## Steps\nZ\n## Verification\nW\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n" });
+  assert.equal(err.code, "playbook-validation-failed");
+  assert.ok(err.details.issues.some((x) => x.toLowerCase().includes("feature")));
+
+  // invalid input type
+  err = validatePlaybook({
+    meta: { origin: "mail.google.com", feature: "send-email", inputs: [{ name: "x", type: "weird-type" }] },
+    body: "## Summary\nX\n## Preconditions\nY\n## Steps\nZ\n## Verification\nW\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n",
+  });
+  assert.ok(err.details.issues.some((x) => x.toLowerCase().includes("type")));
+
+  // valid playbook returns null
+  const ok = validatePlaybook({
+    meta: { origin: "mail.google.com", feature: "send-email", inputs: [], outputs: [] },
+    body: "## Summary\nX\n## Preconditions\nY\n## Steps\nZ\n## Verification\nW\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n",
+  });
+  assert.equal(ok, null);
+
+  // playbookErr is constructible
+  const e = playbookErr("playbook-not-found", "no such playbook", { id: "x" });
+  assert.equal(e.playbookError.code, "playbook-not-found");
+
+  console.log("✓ Task 2 — validation");
+}
