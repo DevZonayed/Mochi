@@ -61,3 +61,30 @@ assert.ok(real3.skipped >= 1);
 
 console.log("✓ codebase-seed tests");
 await fs.rm(tmp, { recursive: true, force: true });
+
+{
+  const fixtureRoot = path.join(__dirname, "_fixtures", "codebase", "nuxt-app");
+  const fw = await detectFramework(fixtureRoot);
+  assert.equal(fw.kind, "nuxt");
+
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-seed-vue-"));
+  process.env.MOCHI_PROJECT_DIR = tmp;
+  await initPlaybooks();
+
+  const r = await seedFromCodebase({ projectRoot: fixtureRoot, domain: "nuxt.example.com" });
+  assert.equal(r.framework, "nuxt");
+  assert.ok(r.drafts.length >= 1);
+  const login = r.drafts.find((d) => d.id === "nuxt.example.com/login");
+  assert.ok(login, "expected nuxt.example.com/login draft");
+
+  const pb = await getPlaybook("nuxt.example.com/login");
+  assert.ok(pb);
+  const pwd = pb.meta.inputs.find((i) => i.name === "password");
+  assert.ok(pwd);
+  assert.equal(pwd.type, "secret");
+  const email = pb.meta.inputs.find((i) => i.name === "email");
+  assert.equal(email.type, "email");
+
+  console.log("✓ Nuxt detector");
+  await fs.rm(tmp, { recursive: true, force: true });
+}

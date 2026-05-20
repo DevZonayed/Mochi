@@ -10,6 +10,18 @@ const traverse = _traverse.default || _traverse;
 
 export async function detectFramework(root) {
   const has = async (p) => { try { await fs.access(path.join(root, p)); return true; } catch { return false; } };
+  // Nuxt: check before Next.js (some projects have both? unlikely, but be specific).
+  const hasNuxtConfig = (await has("nuxt.config.js")) || (await has("nuxt.config.mjs")) || (await has("nuxt.config.ts"));
+  if (hasNuxtConfig) return { kind: "nuxt", pagesDir: "pages" };
+  // SvelteKit
+  const hasSvelteConfig = (await has("svelte.config.js")) || (await has("svelte.config.mjs")) || (await has("svelte.config.ts"));
+  if (hasSvelteConfig) {
+    try {
+      const pkg = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+      if (pkg.devDependencies?.["@sveltejs/kit"] || pkg.dependencies?.["@sveltejs/kit"]) return { kind: "sveltekit", routesDir: "src/routes" };
+    } catch {}
+  }
+  // Next.js
   const hasNextConfig = (await has("next.config.js")) || (await has("next.config.mjs")) || (await has("next.config.ts"));
   if (hasNextConfig) {
     if (await has("app")) return { kind: "next-app-router", appDir: "app" };
@@ -33,6 +45,8 @@ export async function seedFromCodebase({ projectRoot, domain, dryRun = false } =
   if (fw.kind === "next-app-router")    drafts.push(...await scanNextAppRouter(root, fw.appDir, domain));
   if (fw.kind === "next-pages-router")  drafts.push(...await scanNextPagesRouter(root, fw.pagesDir, domain));
   if (fw.kind === "vite-react" || fw.kind === "cra") drafts.push(...await scanReactSrc(root, fw.srcDir, domain));
+  if (fw.kind === "nuxt")               drafts.push(...await scanNuxtPages(root, fw.pagesDir, domain));
+  if (fw.kind === "sveltekit")          drafts.push(...await scanSvelteKit(root, fw.routesDir, domain));
 
   if (dryRun) return { ok: true, framework: fw.kind, drafts: draftsMeta(drafts), written: 0, skipped: 0, warnings: [] };
 
@@ -284,4 +298,141 @@ function describeStep(s) {
     case "type":      return `Type \`${s.valueRef}\` into intent \`${s.intent}\``;
     default:          return JSON.stringify(s);
   }
+}
+
+async function scanNuxtPages(root, pagesDir, domain) {
+  const out = [];
+  const base = path.join(root, pagesDir);
+  async function walk(dir, route = "") {
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        const seg = e.name.startsWith("[") ? "" : e.name;
+        await walk(p, route + (seg ? "/" + seg : ""));
+        continue;
+      }
+      if (e.isFile() && e.name.endsWith(".vue")) {
+        const seg = e.name.slice(0, -4);
+        const sub = seg === "index" ? "" : "/" + seg;
+        const draft = await buildDraftFromVueOrSvelte(p, (route || "") + sub || "/", domain);
+        if (draft) out.push(draft);
+      }
+    }
+  }
+  await walk(base);
+  return out;
+}
+
+async function scanSvelteKit(root, routesDir, domain) {
+  const out = [];
+  const base = path.join(root, routesDir);
+  async function walk(dir, route = "") {
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name.startsWith("(") || e.name.startsWith("_")) { await walk(p, route); continue; } // route groups
+        const seg = e.name.startsWith("[") ? "" : e.name;
+        await walk(p, route + (seg ? "/" + seg : ""));
+        continue;
+      }
+      if (e.isFile() && e.name === "+page.svelte") {
+        const draft = await buildDraftFromVueOrSvelte(p, route || "/", domain);
+        if (draft) out.push(draft);
+      }
+    }
+  }
+  await walk(base);
+  return out;
+}
+
+async function buildDraftFromVueOrSvelte(filePath, route, domain) {
+  let source;
+  try { source = await fs.readFile(filePath, "utf8"); }
+  catch { return null; }
+
+  // Extract template block: Vue (<template>) or Svelte (whole top-level HTML)
+  let templateHtml;
+  const m = /<template[^>]*>([\s\S]*?)<\/template>/.exec(source);
+  if (m) templateHtml = m[1];
+  else {
+    // Svelte: strip out <script> and <style> blocks; the rest is the template
+    templateHtml = source.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<style[\s\S]*?<\/style>/g, "");
+  }
+  if (!templateHtml) return null;
+
+  const tokens = tokenizeHtml(templateHtml);
+  const fields = [];
+  let hasForm = false;
+  let submitButton = null;
+  for (const tok of tokens) {
+    if (tok.tag === "form") hasForm = true;
+    if (tok.tag === "input" || tok.tag === "textarea" || tok.tag === "select") {
+      fields.push(htmlAttrsToField(tok));
+    }
+    if (tok.tag === "button") {
+      const type = tok.attrs.type;
+      if (type === "submit" || !submitButton) submitButton = htmlAttrsToField(tok);
+    }
+  }
+  if (!hasForm && !fields.length) return null;
+
+  const feature = slugFromRoute(route);
+  const id = `${domain}/${feature}`;
+  const inputs = uniqueInputs(fields.map(fieldToInput));
+  const steps = stepsFromFields(route, fields, submitButton);
+
+  const meta = {
+    origin: domain, feature, title: `${humanize(feature)} (draft)`, verifiable: false,
+    preconditions: [], inputs, outputs: [], composes: [], next: null, cron: null,
+    last_verified: null, success_count: 0, playbook_version: 0, schema_version: 1, tags: ["draft", "seeded"],
+  };
+  const body = freshBody({ route, source: filePath, fields, submitButton, steps });
+  return {
+    id, source: path.relative(process.env.MOCHI_PROJECT_DIR || process.cwd(), filePath),
+    meta, body, workflow: { playbookId: id, schemaVersion: 1, steps },
+  };
+}
+
+// Minimal HTML tokenizer — extracts opening tags + attributes only.
+function tokenizeHtml(src) {
+  const tokens = [];
+  const re = /<(\w+)([^>]*)>/g;
+  let m;
+  while ((m = re.exec(src))) {
+    const tag = m[1].toLowerCase();
+    const attrsRaw = m[2];
+    const attrs = {};
+    const attrRe = /([\w@:.-]+)(?:=(?:"([^"]*)"|'([^']*)'|(\{[^}]*\})|([^\s>]+)))?/g;
+    let am;
+    while ((am = attrRe.exec(attrsRaw))) {
+      const name = am[1];
+      const value = am[2] ?? am[3] ?? am[4] ?? am[5] ?? "";
+      attrs[name.toLowerCase()] = value;
+    }
+    tokens.push({ tag, attrs });
+  }
+  return tokens;
+}
+
+function htmlAttrsToField(tok) {
+  // Map Vue/Svelte bindings to React-equivalent shape.
+  const a = tok.attrs;
+  const fieldName =
+    a.name ||
+    (a["v-model"]?.replace(/[{}]/g, "")) ||
+    (a["bind:value"]?.replace(/[{}]/g, "")) ||
+    a.id ||
+    null;
+  return {
+    tag: tok.tag,
+    type: a.type ?? null,
+    name: fieldName,
+    id:   a.id ?? null,
+    aria: a["aria-label"] ?? null,
+    testid: a["data-testid"] ?? null,
+    placeholder: a.placeholder ?? null,
+    accept: a.accept ?? null,
+  };
 }
