@@ -119,3 +119,76 @@ assert.equal(da.accepted?.length || 0, 0);
 console.log("✓ v1.5 wire contracts");
 delete process.env.MOCHI_TEST_SECRET;
 await fs.rm(tmp, { recursive: true, force: true });
+
+// v2: blocked verdict
+{
+  const tmp2 = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-v2wire-"));
+  process.env.MOCHI_PROJECT_DIR = tmp2;
+  await initPlaybooks();
+
+  // Save a playbook that requires a missing secret + a missing free input
+  await handleToolCall(bridge, { name: "browser_playbook_save", arguments: {
+    id: "blocked.example.com/login",
+    meta: { origin: "blocked.example.com", feature: "login", verifiable: true,
+      inputs: [
+        { name: "user",     type: "text",   required: true,  ref: null },
+        { name: "password", type: "secret", required: true,  ref: "${env:NOT_DEFINED_VAR}" },
+      ], outputs: [] },
+    body: "## Summary\nx\n## Preconditions\nx\n## Steps\nx\n## Verification\nx\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n",
+    workflow: { steps: [] },
+  }});
+  const r = JSON.parse((await handleToolCall(bridge, { name: "browser_playbook_run", arguments: { id: "blocked.example.com/login" } })).content[0].text);
+  assert.equal(r.ok, true);
+  assert.equal(r.verdict, "blocked");
+  assert.ok(r.needs.length >= 2);
+  assert.ok(r.needs.find((n) => n.name === "user"));
+  assert.ok(r.needs.find((n) => n.name === "password"));
+  const pwd = r.needs.find((n) => n.name === "password");
+  assert.match(pwd.hint, /env var/);
+
+  await fs.rm(tmp2, { recursive: true, force: true });
+}
+
+// export → import round-trip
+{
+  const tmpExp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-v2exp-"));
+  process.env.MOCHI_PROJECT_DIR = tmpExp;
+  await initPlaybooks();
+  await handleToolCall(bridge, { name: "browser_playbook_save", arguments: {
+    id: "exp.example.com/thing",
+    meta: { origin: "exp.example.com", feature: "thing", verifiable: false, inputs: [], outputs: [] },
+    body: "## Summary\nx\n## Preconditions\nx\n## Steps\nx\n## Verification\nx\n## Selectors used\n\n## Recent runs\n\n## Screenshots\n",
+    workflow: { steps: [] },
+  }});
+  const out = path.join(tmpExp, "bundle.json");
+  const exp = JSON.parse((await handleToolCall(bridge, { name: "browser_playbook_export", arguments: { outputPath: out } })).content[0].text);
+  assert.equal(exp.ok, true);
+  assert.equal(exp.playbookCount, 1);
+
+  // import into fresh dir
+  const tmpImp = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-v2imp-"));
+  process.env.MOCHI_PROJECT_DIR = tmpImp;
+  await initPlaybooks();
+  const imp = JSON.parse((await handleToolCall(bridge, { name: "browser_playbook_import", arguments: { bundlePath: out } })).content[0].text);
+  assert.equal(imp.ok, true);
+  assert.equal(imp.imported.length, 1);
+
+  await fs.rm(tmpExp, { recursive: true, force: true });
+  await fs.rm(tmpImp, { recursive: true, force: true });
+}
+
+// dashboard generates with open:false
+{
+  const tmpDash = await fs.mkdtemp(path.join(os.tmpdir(), "mochi-v2dash-"));
+  process.env.MOCHI_PROJECT_DIR = tmpDash;
+  await initPlaybooks();
+  const outPath = path.join(tmpDash, "dash.html");
+  const d = JSON.parse((await handleToolCall(bridge, { name: "browser_playbook_dashboard", arguments: { outputPath: outPath, open: false } })).content[0].text);
+  assert.equal(d.ok, true);
+  assert.equal(d.playbookCount, 0);
+  const stat = await fs.stat(outPath);
+  assert.ok(stat.size > 0);
+  await fs.rm(tmpDash, { recursive: true, force: true });
+}
+
+console.log("✓ v2 wire contracts");
