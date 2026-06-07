@@ -10,7 +10,8 @@
     "storage",
     "alarms",
     "activeTab",
-    "debugger"
+    "debugger",
+    "notifications"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

@@ -122,3 +122,59 @@ async function saveVisuals() {
 });
 
 loadVisuals();
+
+// ---------- Notifications ----------
+const notifEls = {
+  sw:      () => document.getElementById("notif-switch"),
+  onboard: () => document.getElementById("notif-onboard"),
+  test:    () => document.getElementById("notif-test-btn"),
+  confirm: () => document.getElementById("notif-confirm"),
+  help:    () => document.getElementById("notif-help"),
+  status:  () => document.getElementById("notif-status"),
+};
+
+async function refreshNotif() {
+  let res;
+  try { res = await chrome.runtime.sendMessage({ type: "popup_notif_status" }); } catch { return; }
+  if (!res) return;
+  const sw = notifEls.sw();
+  if (sw && document.activeElement !== sw) sw.checked = !!res.enabled;
+  // Show onboarding until verified (and only when notifications are enabled).
+  notifEls.onboard().style.display = (res.enabled && !res.verified) ? "block" : "none";
+}
+
+notifEls.sw().addEventListener("change", async (e) => {
+  await chrome.runtime.sendMessage({ type: "popup_set_notif_enabled", enabled: e.target.checked });
+  refreshNotif();
+});
+
+notifEls.test().addEventListener("click", async () => {
+  notifEls.status().textContent = "";
+  await chrome.runtime.sendMessage({ type: "popup_send_test_notification" });
+  notifEls.confirm().style.display = "block";
+  notifEls.help().style.display = "none";
+});
+
+document.getElementById("notif-yes-btn").addEventListener("click", async () => {
+  await chrome.runtime.sendMessage({ type: "popup_set_notif_verified", verified: true });
+  notifEls.confirm().style.display = "none";
+  notifEls.status().className = "status ok";
+  notifEls.status().textContent = "🎉 You're all set!";
+  setTimeout(refreshNotif, 1200);
+});
+
+document.getElementById("notif-no-btn").addEventListener("click", () => {
+  notifEls.confirm().style.display = "none";
+  notifEls.help().style.display = "block";
+});
+
+document.getElementById("notif-open-settings-btn").addEventListener("click", async () => {
+  const r = await chrome.runtime.sendMessage({ type: "popup_open_os_notification_settings" });
+  notifEls.status().className = r?.ok ? "status ok" : "status err";
+  notifEls.status().textContent = r?.ok
+    ? "Opened macOS settings — enable Google Chrome, then test again."
+    : "Couldn't open settings automatically. Open System Settings → Notifications → Google Chrome.";
+});
+
+refreshNotif();
+setInterval(refreshNotif, 2000);

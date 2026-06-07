@@ -48,6 +48,9 @@ function startFakeExtension() {
       case "navigate":
         result = { tabId: 100, url: params?.url ?? "about:blank" };
         break;
+      case "request_attention":
+        result = { ok: true, notified: true, hasSession: true, reason: params?.reason ?? null };
+        break;
       case "snapshot":
         result = {
           tabId: 100,
@@ -192,7 +195,7 @@ async function main() {
   logStep("Listing tools");
   const tools = await client.listTools();
   const names = tools.tools.map((t) => t.name);
-  assertEq("total tool count", names.length, 54);
+  assertEq("total tool count", names.length, 55);
   for (const n of [
     "browser_session_health",
     "browser_evaluate",
@@ -273,6 +276,12 @@ async function main() {
   const clickOk = parsePayload(await client.callTool({ name: "browser_click", arguments: { ref: "button.ok", intent: "click ok" } }));
   assertEq("happy click ref", clickOk.ref, "button.ok");
   assertOk("happy click no diagnostics", clickOk.diagnostics === undefined);
+
+  // ----- 9b) request_attention round-trips through the broker -----
+  logStep("Calling browser_request_attention");
+  const attnRes = parsePayload(await client.callTool({ name: "browser_request_attention", arguments: { reason: "look here" } }));
+  assertOk("request_attention ok", attnRes.ok === true, attnRes);
+  assertEq("request_attention reason echoed", attnRes.reason, "look here");
 
   // ----- 10) Confirm wire types the broker actually forwarded -----
   logStep("Verifying wire types reached the fake extension");
