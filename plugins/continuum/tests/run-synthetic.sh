@@ -974,23 +974,37 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
       const eq = (a,b,label) => { if (JSON.stringify(a)!==JSON.stringify(b)) { console.log('FAIL',label,'got',JSON.stringify(a),'want',JSON.stringify(b)); bad++; } };
       const mk = (chatId, ts, text) => { const o = { provider:'whatsapp', accountId:'work', chatId, msgId:'M'+ts, ts, tsIso:new Date(ts*1000).toISOString(), fromMe:false, senderId:'19999999999@s.whatsapp.net', senderName:'A', kind:'text', text, media:null, reply_to:null, source:'live' }; return { ...o, fingerprint: D.fingerprint(o) }; };
 
-      // two chats stored: one allowlisted ('c@g.us'), one not ('x@g.us')
+      // three chats stored: two allowlisted ('c@g.us', 'b@g.us'), one not ('x@g.us')
+      // c@g.us has newestTs=1100; b@g.us has newestTs=500 (older) — exercises DESC sort.
+      // b@g.us has NO meta.json — exercises name/chatKind null fallback.
       m.appendMessage(d, mk('c@g.us', 1000, 'hi'));
       m.appendMessage(d, mk('c@g.us', 1100, 'yo'));
       m.appendMessage(d, mk('x@g.us', 1200, 'secret'));
-      // give the allowed chat a meta.json (name + chatKind)
+      m.appendMessage(d, mk('b@g.us', 500, 'older'));
+      // give c@g.us a meta.json (name + chatKind); b@g.us intentionally has none
       fs.writeFileSync(P.commsMetaPath(d,'whatsapp','work','c@g.us'),
         JSON.stringify({ name:'Team', chatKind:'group', updatedAt:1100 }));
 
-      // allowedJids structural filter: only c@g.us is returned
-      const allowed = ['123@s.whatsapp.net','c@g.us'].map(s=>s); // includes c@g.us
+      // allowedJids structural filter: only c@g.us and b@g.us are returned; x@g.us is excluded
+      const allowed = ['123@s.whatsapp.net','c@g.us','b@g.us'].map(s=>s);
       const chats = m.listChats(d, allowed);
-      eq(chats.length, 1, 'only-allowlisted-chat-returned');
-      eq(chats[0].chatId, 'c@g.us', 'chat-id');
+      eq(chats.length, 2, 'only-allowlisted-chats-returned');
+
+      // Sort invariant: newestTs DESC — c@g.us (1100) must come before b@g.us (500)
+      eq(chats[0].chatId, 'c@g.us', 'first-chat-is-newest');
+      eq(chats[1].chatId, 'b@g.us', 'second-chat-is-older');
+
+      // c@g.us: meta fields populated from meta.json
       eq(chats[0].name, 'Team', 'name-from-meta');
       eq(chats[0].chatKind, 'group', 'chatKind-from-meta');
       eq(chats[0].count, 2, 'count-from-cursor');
       eq(chats[0].newestTs, 1100, 'newestTs-from-cursor');
+
+      // b@g.us: no meta.json -> name and chatKind must be null (not undefined or missing)
+      eq(chats[1].name, null, 'no-meta-name-is-null');
+      eq(chats[1].chatKind, null, 'no-meta-chatKind-is-null');
+      eq(chats[1].count, 1, 'no-meta-count-from-cursor');
+      eq(chats[1].newestTs, 500, 'no-meta-newestTs');
 
       // null allowedJids -> nothing leaks (strict-by-default)
       eq(m.listChats(d, null).length, 0, 'null-allowed-returns-none');
