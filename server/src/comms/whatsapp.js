@@ -177,7 +177,6 @@ export class WhatsAppProvider extends CommsProvider {
     sock.ev.on("connection.update", async (update) => {
       if (update.connection === "open") {
         this.statuses.set(accountId, "connected");
-        if (sock.user) { this._self = sock.user.id; }
         return;
       }
       if (update.connection === "close") {
@@ -209,7 +208,9 @@ export class WhatsAppProvider extends CommsProvider {
     const makeSocket = deps.makeSocket || ((d) => this._realMakeSocket(accountId, this.getSessionDir(accountId), d));
     const qrToDataUrl = deps.qrToDataUrl || (async (s) => this._qrToDataUrl(s));
     const sock = await this.connect(accountId, { makeSocket });
-    this._wireConnection(accountId, sock, projectDir, makeSocket);
+    // NOTE: do NOT call _wireConnection here; connect() already wired it with
+    // the correct factory. Calling it again would double-wire the handler,
+    // causing two reconnects on every close event (socket leak / doubling storm).
 
     // Pairing path: request ONCE, never loop (429 guard).
     if (opts.phone) {
