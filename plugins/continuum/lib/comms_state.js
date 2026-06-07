@@ -12,7 +12,7 @@ function readJsonSafe(file, fallback) {
   try {
     if (!fs.existsSync(file)) return fallback;
     const v = JSON.parse(fs.readFileSync(file, "utf8"));
-    return v && typeof v === "object" ? v : fallback;
+    return (v && typeof v === "object" && !Array.isArray(v)) ? v : fallback;
   } catch {
     return fallback;
   }
