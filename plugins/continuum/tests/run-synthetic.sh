@@ -422,6 +422,84 @@ BAD_SD=$(grep -l 'CLAUDE_SKILL_DIR' "$PLUGIN_DIR"/commands/*.md 2>/dev/null | wc
 USES=$(grep -l 'cat \.continuum/\.plugin-root' "$PLUGIN_DIR"/commands/*.md 2>/dev/null | wc -l | tr -d ' ')
 [ "$USES" = "7" ] && ok "all 7 commands use .continuum/.plugin-root" || fail "only $USES commands use the file path"
 
+# ============================================================================
+# 0.5.0 MEMORY layer: verification ledger + link provenance
+# ============================================================================
+
+V5REPO="$(mktemp -d -t continuum-synth-v5.XXXXXX)"
+git -C "$V5REPO" init -q
+git -C "$V5REPO" commit -q --allow-empty -m init
+mkdir -p "$V5REPO/.continuum/chain/links" "$V5REPO/.continuum/archive/transcripts"
+touch "$V5REPO/.continuum/chain/index.jsonl"
+
+# ---- T30: verification ledger record → read reflects 1 element --------------
+echo
+echo "T30 — verification_ledger record + read reflect the element"
+node "$PLUGIN_DIR/lib/verification_ledger_cli.js" record \
+  --project-dir "$V5REPO" --app "Demo App" --route "/login" \
+  --element '{"id":"submit-btn","selector":"#submit","verdict":"WORKS"}' > /dev/null
+LEDGER=$(node "$PLUGIN_DIR/lib/verification_ledger_cli.js" read --project-dir "$V5REPO" --app "Demo App")
+ELN=$(echo "$LEDGER" | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d['routes'].get('/login',{}).get('elements',[])))")
+[ "$ELN" = "1" ] && ok "ledger has 1 element on /login" || fail "expected 1 element got $ELN"
+APP_SLUG_FILE="$V5REPO/.continuum/verification/demo-app.json"
+[ -f "$APP_SLUG_FILE" ] && ok "ledger stored at slugged path demo-app.json" || fail "slugged ledger file missing"
+
+# ---- T31: coverage total==1 after one WORKS element ------------------------
+echo
+echo "T31 — coverage reports total==1, covered==1"
+COV=$(node "$PLUGIN_DIR/lib/verification_ledger_cli.js" coverage --project-dir "$V5REPO" --app "Demo App")
+TOT=$(echo "$COV" | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
+CVD=$(echo "$COV" | python3 -c "import json,sys; print(json.load(sys.stdin)['covered'])")
+[ "$TOT" = "1" ] && ok "coverage.total == 1" || fail "expected total 1 got $TOT"
+[ "$CVD" = "1" ] && ok "coverage.covered == 1 (WORKS counts)" || fail "expected covered 1 got $CVD"
+
+# ---- T32: an UNTESTED element makes coverage.untested > 0 ------------------
+echo
+echo "T32 — UNTESTED element raises coverage.untested"
+node "$PLUGIN_DIR/lib/verification_ledger_cli.js" record \
+  --project-dir "$V5REPO" --app "Demo App" --route "/login" \
+  --element '{"id":"forgot-link","selector":"#forgot","verdict":"UNTESTED"}' > /dev/null
+COV2=$(node "$PLUGIN_DIR/lib/verification_ledger_cli.js" coverage --project-dir "$V5REPO" --app "Demo App")
+UNT=$(echo "$COV2" | python3 -c "import json,sys; print(json.load(sys.stdin)['untested'])")
+TOT2=$(echo "$COV2" | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
+CVD2=$(echo "$COV2" | python3 -c "import json,sys; print(json.load(sys.stdin)['covered'])")
+[ "$UNT" -gt 0 ] && ok "coverage.untested > 0 (got $UNT)" || fail "expected untested>0 got $UNT"
+[ "$TOT2" = "2" ] && [ "$CVD2" = "1" ] && ok "total=2, covered still 1 (untested excluded)" || fail "expected total=2 covered=1 got total=$TOT2 covered=$CVD2"
+
+# ---- T33: write_link meta.json now carries bundle_hash provenance ----------
+echo
+echo "T33 — write_link meta.json contains bundle_hash key"
+echo "provenance link" | node "$PLUGIN_DIR/lib/write_link.js" --project-dir "$V5REPO" --tags "test" > /dev/null
+META="$V5REPO/.continuum/chain/links/0001/meta.json"
+[ -f "$META" ] && ok "meta.json written" || fail "meta.json missing"
+HAS_BH=$(python3 -c "import json,sys; d=json.load(open('$META')); print('yes' if 'bundle_hash' in d else 'no')")
+[ "$HAS_BH" = "yes" ] && ok "meta.json has bundle_hash key (value may be null)" || fail "bundle_hash key missing from meta.json"
+HAS_PV=$(python3 -c "import json,sys; d=json.load(open('$META')); print('yes' if 'plugin_version' in d else 'no')")
+[ "$HAS_PV" = "yes" ] && ok "meta.json has plugin_version key" || fail "plugin_version key missing from meta.json"
+
+rm -rf "$V5REPO"
+
+# ---- T34: recall flags old links as stale (verify-before-assert) ------------
+echo
+echo "T34 — recall flags an old link as stale"
+STREPO="$(mktemp -d -t continuum-synth-stale.XXXXXX)"
+mkdir -p "$STREPO/.continuum/chain/links/0001" "$STREPO/.continuum/chain/links/0002"
+# Link 1: ~400 days ago (stale). Link 2: today (fresh). Both match 'auth'.
+OLD_TS="2025-05-01T10:00:00Z"
+NEW_TS="$(python3 -c "import datetime; print(datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'))")"
+printf '%s\n%s\n' \
+  "{\"id\":1,\"ts\":\"$OLD_TS\",\"commit\":null,\"summary_tokens\":20,\"tags\":[\"auth\"]}" \
+  "{\"id\":2,\"ts\":\"$NEW_TS\",\"commit\":null,\"summary_tokens\":20,\"tags\":[\"auth\"]}" \
+  > "$STREPO/.continuum/chain/index.jsonl"
+echo "Old auth decision." > "$STREPO/.continuum/chain/links/0001/summary.md"; echo '{}' > "$STREPO/.continuum/chain/links/0001/refs.json"
+echo "Fresh auth decision." > "$STREPO/.continuum/chain/links/0002/summary.md"; echo '{}' > "$STREPO/.continuum/chain/links/0002/refs.json"
+STJSON=$(node "$PLUGIN_DIR/lib/recall_cli.js" --project-dir "$STREPO" --json -- auth)
+STALE1=$(echo "$STJSON" | python3 -c "import json,sys; d=json.load(sys.stdin); h={x['id']:x for x in d['hits']}; print(h.get(1,{}).get('stale'))")
+STALE2=$(echo "$STJSON" | python3 -c "import json,sys; d=json.load(sys.stdin); h={x['id']:x for x in d['hits']}; print(h.get(2,{}).get('stale'))")
+[ "$STALE1" = "True" ] && ok "old link flagged stale=true" || fail "old link not flagged stale (got $STALE1)"
+[ "$STALE2" = "False" ] && ok "fresh link not flagged stale" || fail "fresh link wrongly flagged stale (got $STALE2)"
+rm -rf "$STREPO"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -20,6 +21,27 @@ import { register as brokerRegister } from "../lib/broker.js";
 // standalone. .plugin-root receives this path so slash commands can
 // resolve helpers via `cat .continuum/.plugin-root` + a fixed relative tail.
 const CONTINUUM_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// Best-effort env provenance — which server bundle is live + which plugin
+// version is running. Same resolution as lib/write_link.js. Never throws.
+function readProvenance() {
+  let bundle_hash = null;
+  let plugin_version = null;
+  try {
+    const bundlePath = path.resolve(CONTINUUM_ROOT, "../../server/dist/server.bundle.mjs");
+    if (fs.existsSync(bundlePath)) {
+      bundle_hash = crypto.createHash("sha256").update(fs.readFileSync(bundlePath)).digest("hex");
+    }
+  } catch {}
+  try {
+    const pluginJsonPath = path.resolve(CONTINUUM_ROOT, "../../.claude-plugin/plugin.json");
+    if (fs.existsSync(pluginJsonPath)) {
+      const pj = JSON.parse(fs.readFileSync(pluginJsonPath, "utf8"));
+      plugin_version = pj.version ?? null;
+    }
+  } catch {}
+  return { bundle_hash, plugin_version };
+}
 
 async function readStdin() {
   return await new Promise((resolve) => {
@@ -117,6 +139,24 @@ function buildLoadedContext(projectDir, cfg) {
     tokens = estimateTokens(assembled);
   }
 
+  // Verify-before-assert + tooling-gotchas reminder. Kept to <=6 lines so it
+  // doesn't eat the token budget. Best-effort note about a per-project file.
+  let projectGotchas = "";
+  try {
+    if (fs.existsSync(path.join(paths(projectDir).root, "gotchas.md"))) {
+      projectGotchas = ` Project-specific gotchas exist at \`.continuum/gotchas.md\` — read them too.`;
+    }
+  } catch {}
+  assembled += [
+    ``,
+    ``,
+    `---`,
+    ``,
+    `**Verify-before-assert + tooling gotchas**`,
+    `- Memory above is point-in-time; re-verify any memory-derived claim against current code/live state before asserting it as fact.`,
+    `- Before trusting browser QA results, consult the browser skill gotchas (\`skills/browser/references/gotchas.md\`): console reads need \`sinceNavigation\`; prefer selector-based clicks; \`browser_emulate_viewport\` changes JS layout (innerWidth/matchMedia) but \`browser_window_resize\` does NOT; after a deploy confirm the live bundle hash matches the built one; on a 5xx read the response body.${projectGotchas}`,
+  ].join("\n");
+
   assembled += `\n\n_(continuum: token budget used ≈ ${tokens}/${cfg.inject_token_cap}. Use \`/continuum:checkpoint\` to write a new link when decisions accrue.)_`;
   return assembled;
 }
@@ -149,6 +189,45 @@ async function main() {
     fs.mkdirSync(p.root, { recursive: true });
     if (sessionId) fs.writeFileSync(p.sessionIdFile, sessionId);
     fs.writeFileSync(path.join(p.root, ".plugin-root"), CONTINUUM_ROOT);
+    // Protective .gitignore (idempotent): the verification ledger, provenance,
+    // uploads, runs and screenshots can contain page-derived data (control
+    // labels, response bodies, secrets seeded for testing) and should not be
+    // committed. The chain itself (chain/, STATE.md) is intentionally NOT ignored.
+    const giPath = path.join(p.root, ".gitignore");
+    if (!fs.existsSync(giPath)) {
+      fs.writeFileSync(giPath, [
+        "# Auto-written by continuum. Transient / page-derived data — do not commit.",
+        "# The chain (chain/, STATE.md) is intentionally tracked and NOT ignored.",
+        "verification/",
+        "runs/",
+        "uploads/",
+        "screenshots/",
+        ".env-provenance.json",
+        "",
+      ].join("\n"));
+    }
+  } catch {}
+
+  // Stamp env provenance every session so a later checkpoint / debugging pass
+  // can tell exactly which plugin version + server bundle was live. Best-effort.
+  try {
+    const p = paths(projectDir);
+    fs.mkdirSync(p.root, { recursive: true });
+    const { bundle_hash, plugin_version } = readProvenance();
+    fs.writeFileSync(
+      path.join(p.root, ".env-provenance.json"),
+      JSON.stringify(
+        {
+          plugin_version,
+          bundle_hash,
+          model: process.env.CLAUDE_MODEL || null,
+          session_id: sessionId,
+          ts: new Date().toISOString(),
+        },
+        null,
+        2
+      ) + "\n"
+    );
   } catch {}
 
   // Register with the Mochi broker so the extension popup can target this

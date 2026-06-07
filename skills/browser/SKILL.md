@@ -31,6 +31,35 @@ attachments. The unified plugin (v0.2+) eliminates this — there is no
 extension-vs-MCP conflict anymore. If your memory has an old "browser MCP
 conflicts with the Mochi extension" note from a prior session, it's stale.
 
+## Gotchas (read before trusting results)
+
+Hard-won quirks that produce false "all clear" results. The full note with fixes
+lives in [`references/gotchas.md`](references/gotchas.md) — read it before
+reporting a pass.
+
+- **Console buffer is stale.** Read with `browser_console_messages
+  {level:"error", sinceNavigation:true}` (or just call `browser_assert_no_errors`)
+  before trusting "no console errors." `level:"error"` includes uncaught
+  exceptions.
+- **Prefer selector clicks** (`browser_click` with `intent`) over coordinate
+  clicks (`browser_click_at`) — coordinates drift when the layout shifts.
+- **Viewport:** `browser_emulate_viewport` changes `window.innerWidth` /
+  `matchMedia` (real JS layout — use it for media-query/responsive tests);
+  `browser_window_resize` only moves the OS window and does NOT affect JS layout.
+  Don't conflate them.
+- **Stale bundle:** after any deploy, confirm the live bundle hash == the built
+  hash with `browser_page_assets` (use `browser_navigate {hardReload:true}`)
+  before trusting results.
+- **Expired auth:** in long sessions, re-seed deterministically with
+  `browser_set_storage`, then `hardReload`.
+- **Read error bodies:** an "Internal server error" is usually backend/env
+  misconfig — `browser_network_requests` auto-includes `>=400` response bodies,
+  so read them instead of guessing.
+- **Render != Works:** a visible/clickable control is not verified. Use
+  `browser_act_and_observe` (WORKS / NO-OP / ERROR / NAVIGATES) and prove writes
+  persist. Enumerate every control with `browser_audit_interactives` before
+  claiming "tested everything," and never report pass with untested controls.
+
 ## Default Behavior
 
 - Start with `browser_session_start` before interacting with a page.
@@ -49,6 +78,14 @@ conflicts with the Mochi extension" note from a prior session, it's stale.
 - Use `browser_screenshot` when visual evidence matters.
 - Use `browser_console_messages` and `browser_network_requests` for runtime
   debugging after page loads and interactions.
+- Call `browser_assert_no_errors` after every page load and every action — it's
+  the one-call gate for console errors/exceptions and `>=400`/failed requests
+  since the page loaded.
+- Enumerate every actionable control with `browser_audit_interactives` for
+  coverage before claiming you tested a page.
+- Use `browser_act_and_observe` to confirm an action actually did something
+  (WORKS / NO-OP / ERROR / NAVIGATES) — a NO-OP is a dead control, i.e. a defect,
+  not a pass.
 - Use `browser_session_end` when the task is done unless the user wants the
   browser left open.
 

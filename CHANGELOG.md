@@ -8,6 +8,80 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.5.0] — 2026-06-07
+
+QA-truth release. The browser tools stop trusting "it rendered" and start
+proving "it works." Six new tools turn a QA pass into an exhaustive,
+verdict-driven sweep — enumerate every control, drive each one, gate every
+page and action for errors, and prove writes persisted. Tool count grows
+**54 → 60**.
+
+### Added
+
+- **`browser_assert_no_errors`** — one-call health gate. `ok=false` if **any**
+  console error/uncaught exception **or** any `>=400`/failed request happened
+  since the page loaded (`sinceNavigation` default, `sinceMs`,
+  `ignoreUrlContains`). Failed-request entries include the response `.body`.
+- **`browser_audit_interactives`** — the coverage backbone. Enumerates every
+  actionable control (`scope:"all"|"viewport"`, `limit`, `includeHidden`) with
+  `{selector, role, accessibleName, visible, inViewport, disabled,
+  hasClickHandler, box}` so nothing is left UNTESTED.
+- **`browser_act_and_observe`** — perform one action
+  (`click`/`type`/`navigate`/`press_key`/`click_at`) and classify the result:
+  `WORKS` / `NO-OP` / `ERROR` / `NAVIGATES`. A `NO-OP` (clickable but nothing
+  changed) is a dead control = defect. Returns `urlChanged`, `domChanged`,
+  `networkDelta`, `consoleDelta`. Render != Works.
+- **`browser_wait_for_response`** — block until a matching network response
+  arrives (`urlGlob`/`urlContains`, `method`, `statusGte`/`statusLt`,
+  `timeoutMs`). Proves a write actually persisted.
+- **`browser_page_assets`** — hash the live page assets
+  (`script`/`css`/`document`) with sha256 + a `pageHash`. Confirm the live
+  bundle hash == the built hash (stale-bundle guard).
+- **`browser_set_storage`** — deterministic auth/state seeding: set
+  `localStorage`, `sessionStorage`, and `cookies` (or `clear`) in one call.
+- **Exhaustive QA coverage mode** (`/qa exhaustive`) — enumerate every control,
+  drive each, gate each page/action, and assign one of five verdicts per
+  control: **WORKS**, **NO-OP** (defect), **ERROR** (defect), **NAVIGATES**,
+  **DISABLED**.
+- **Honesty-gate CLI** — refuses to report a run as "pass" while any control is
+  UNTESTED/UNCERTAIN. The rule is never "everything works" but *"N of M
+  controls verified — here is each result, and here is what I could NOT verify
+  and why."*
+- **Verification ledger** — per-control results recorded with **provenance
+  stamping** so every verdict traces back to the action and evidence that
+  produced it.
+- **Persistent tooling-gotchas note** — `skills/browser/references/gotchas.md`,
+  the canonical durable record of hard-won quirks so they're never re-learned.
+
+### Changed
+
+- `browser_navigate` now accepts `hardReload` (cache-bypass load) and
+  `disableCache` (persist cache-off for the tab).
+- `browser_console_messages` accepts `sinceNavigation:true` to scope to the
+  current page; `level:"error"` includes uncaught exceptions.
+- `browser_network_requests` accepts `sinceNavigation`, `sinceMs`, and
+  `includeBody`; error responses (`>=400`/failed) include the captured response
+  body automatically.
+- `browser_click` reports disabled controls (fails loudly with "element is
+  disabled" instead of silently passing) and retries a transient not-found once.
+- `browser_session_health` accepts `heal:true` to re-attach the debugger to
+  session tabs.
+- `/continuum:recall` now flags stale chain-link hits by age, so remembered
+  facts are re-verified against current code/live state before being asserted.
+- **Tool count 54 → 60.**
+
+### Fixed
+
+- **Docs:** clarified `browser_emulate_viewport` vs `browser_window_resize`.
+  `browser_emulate_viewport` (CDP `Emulation.setDeviceMetricsOverride`) **does**
+  change `window.innerWidth` / `matchMedia` — real JS layout, and the tool to
+  use for responsive/media-query testing. `browser_window_resize` only
+  moves/sizes the OS Chrome window and does **NOT** affect JS layout. A common
+  past mistake was conflating the two (or assuming emulation "only affects
+  screenshots").
+
+---
+
 ## [0.4.1] — 2026-05-20
 
 ### Fixed
