@@ -1313,6 +1313,19 @@ DUP=$(grep -cxF "comms/*" "$GI")
 [ "$DUP" = "1" ] && ok "comms/* not duplicated on 2nd run" || fail "comms/* duplicated ($DUP times)"
 rm -rf "$G56REPO"
 
+# ---- T57: first-session single-emit — bootstrap directive still emitted ------
+echo
+echo "T57 — single terminal emit: bootstrap directive present on a fresh repo, exactly one JSON object"
+F57REPO="$(mktemp -d -t continuum-synth-f57.XXXXXX)"
+git -C "$F57REPO" init -q
+F57_OUT="$(run_hook hooks/session_start.js "{\"session_id\":\"sf57\",\"cwd\":\"$F57REPO\",\"hook_event_name\":\"SessionStart\",\"source\":\"startup\"}")"
+# Exactly one hookSpecificOutput object on stdout (no double-emit from a leftover early path):
+EMITS=$(echo "$F57_OUT" | grep -oF '"hookSpecificOutput"' | wc -l | tr -d ' ')
+[ "$EMITS" = "1" ] && ok "exactly one emit on first session" || fail "expected 1 emit got $EMITS"
+F57_CTX="$(echo "$F57_OUT" | extract_ctx)"
+echo "$F57_CTX" | grep -q "No context chain" && ok "bootstrap directive still present via accumulator" || fail "bootstrap directive lost in refactor"
+rm -rf "$F57REPO"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
