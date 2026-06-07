@@ -111,27 +111,52 @@ async function setup() {
   await fs.rm(dir, { recursive: true, force: true });
 }
 
-// 4b) messaging-history.set overlaps a live message by CONTENT+MINUTE (same fingerprint)
-//     but uses a DIFFERENT msgId — exercises cross-source Tier-2 fingerprint dedup.
-//     Tier-1 passes (distinct msgIds). Tier-2 fires: existing record is 'live' (real),
-//     incoming backfill is also 'real' -> live wins, backfill is dropped. Only 1 record.
+// 4b) messaging-history.set re-delivers the SAME msgId already stored via live upsert.
+//     Exercises Tier-1 (same real provider msgId) dedup — spec §4.2.
+//     Backfill arrives with msgId H1 (same as the live record) -> Tier-1 catches it.
+//     Count must remain 1; surviving record retains source:'live'.
 {
   const dir = await setup();
   const sock = mockSocket();
   const p = new WhatsAppProvider({ projectDirFor: () => dir });
   await p.connect(ACCOUNT, { makeSocket: () => sock });
-  // live arrives first with msgId 'LIVE2'
-  sock._emit("messages.upsert", { type: "notify", messages: [waMsg({ id: "LIVE2", ts: 1717700000, text: "overlap msg" })] });
+  // live upsert stores msgId H1
+  sock._emit("messages.upsert", { type: "notify", messages: [waMsg({ id: "H1", ts: 1717700000, text: "shared msg" })] });
   await new Promise((r) => setTimeout(r, 10));
-  // backfill ships the same logical message but with a DIFFERENT msgId 'BF2' (same ts + text)
-  // -> Tier-1 passes (different msgId); Tier-2 detects same fingerprint on a real/live record
-  //    and drops the backfill as a duplicate-fingerprint-live-wins.
-  sock._emit("messaging-history.set", { messages: [waMsg({ id: "BF2", ts: 1717700000, text: "overlap msg" })], isLatest: true });
+  // backfill re-delivers the SAME msgId H1 (true backfill overlap of the same message)
+  // -> Tier-1 msgId dedup catches it; the backfill is dropped. Count stays 1.
+  sock._emit("messaging-history.set", { messages: [waMsg({ id: "H1", ts: 1717700000, text: "shared msg" })], isLatest: true });
   await new Promise((r) => setTimeout(r, 15));
 
   const slice = getSlice(dir, { provider: "whatsapp", accountId: ACCOUNT, chatId: ALLOWED });
-  assert.equal(slice.messages.length, 1, "backfill dup of live (same fp, diff msgId) must be deduplicated by Tier-2");
-  assert.equal(slice.messages[0].source, "live", "surviving record must be the live one");
+  assert.equal(slice.messages.length, 1, "Tier-1: same msgId backfill re-delivery must dedupe (count stays 1)");
+  assert.equal(slice.messages[0].source, "live", "surviving record must be the original live one");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 4c) Two DISTINCT messages with same content+minute but DIFFERENT real msgIds:
+//     one arrives via live, the other ONLY via backfill (REAL_A != REAL_B).
+//     Tier-1 passes (different msgIds). Tier-2 must NOT suppress the backfill —
+//     both are real provider records with distinct identities. Count must be 2.
+//     This guards against the silent-loss bug where live-vs-backfill Tier-2
+//     suppression dropped genuinely distinct messages (spec §4.2 violation).
+{
+  const dir = await setup();
+  const sock = mockSocket();
+  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  await p.connect(ACCOUNT, { makeSocket: () => sock });
+  // live message with msgId REAL_A
+  sock._emit("messages.upsert", { type: "notify", messages: [waMsg({ id: "REAL_A", ts: 1717700000, text: "ok" })] });
+  await new Promise((r) => setTimeout(r, 10));
+  // distinct backfill message with msgId REAL_B (same content+minute, different provider msgId)
+  // -> Tier-1 passes; Tier-2 must not suppress because both are real records.
+  sock._emit("messaging-history.set", { messages: [waMsg({ id: "REAL_B", ts: 1717700000, text: "ok" })], isLatest: true });
+  await new Promise((r) => setTimeout(r, 15));
+
+  const slice = getSlice(dir, { provider: "whatsapp", accountId: ACCOUNT, chatId: ALLOWED });
+  assert.equal(slice.messages.length, 2, "distinct live+backfill msgs with same content must both be stored (no silent loss)");
+  const ids = slice.messages.map((m) => m.msgId).sort();
+  assert.deepEqual(ids, ["REAL_A", "REAL_B"], "both real provider msgIds must survive");
   await fs.rm(dir, { recursive: true, force: true });
 }
 
