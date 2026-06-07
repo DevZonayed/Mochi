@@ -1430,6 +1430,26 @@ for c in comms-setup comms-sync comms-recall comms-import comms-status; do
   head -1 "$CMDDIR/$c.md" | grep -qx -- "---" && grep -q "^description:" "$CMDDIR/$c.md" && ok "$c has frontmatter+description" || fail "$c frontmatter malformed"
 done
 
+# ---- T60: first-session reachability — bootstrap + ASK in one emit, ordered --
+echo
+echo "T60 — first session: bootstrap directive THEN comms ASK, single emit (B3 acceptance, Task 30)"
+F60REPO="$(mktemp -d -t continuum-synth-f60.XXXXXX)"
+git -C "$F60REPO" init -q
+F60_OUT="$(run_hook hooks/session_start.js "{\"session_id\":\"sf60\",\"cwd\":\"$F60REPO\",\"hook_event_name\":\"SessionStart\",\"source\":\"startup\"}")"
+# Exactly one hookSpecificOutput (no double-emit from a re-introduced early-exit)
+EMITS60=$(echo "$F60_OUT" | grep -oF '"hookSpecificOutput"' | wc -l | tr -d ' ')
+[ "$EMITS60" = "1" ] && ok "single emit on fresh repo (no double-emit regression)" || fail "expected 1 emit got $EMITS60"
+F60_CTX="$(echo "$F60_OUT" | extract_ctx)"
+# Bootstrap directive must be present (accumulator wiring preserved)
+echo "$F60_CTX" | grep -q "No context chain" && ok "bootstrap directive present in single payload" || fail "bootstrap directive missing from fresh-repo context"
+# Comms ASK must be present in the SAME payload (the B3 contract: undecided + startup → ASK)
+echo "$F60_CTX" | grep -q "hasn't decided about communication-channel sync" && ok "comms ASK co-emitted with bootstrap in one payload (B3)" || fail "comms ASK missing (B3 regression: early-exit before commsGate?)"
+# ORDERING: bootstrap must appear BEFORE the comms ASK in the single context string
+BPOS60=$(echo "$F60_CTX" | grep -n "No context chain" | head -1 | cut -d: -f1)
+APOS60=$(echo "$F60_CTX" | grep -n "hasn't decided about communication-channel sync" | head -1 | cut -d: -f1)
+[ -n "$BPOS60" ] && [ -n "$APOS60" ] && [ "$BPOS60" -lt "$APOS60" ] && ok "bootstrap precedes comms ASK (ordering contract)" || fail "ordering wrong: bootstrap=$BPOS60 ask=$APOS60"
+rm -rf "$F60REPO"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
