@@ -770,6 +770,56 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
 echo "$T40_OUT" | grep -qF "CUR OK" && ok "comms_store cursor read/write" || { fail "comms_store cursor: $T40_OUT"; }
 rm -rf "$CUR_REPO"
 
+# ---- T41: comms_store appendMessage — dedupe + cursor + live-wins ----------
+echo
+echo "T41 — comms_store appendMessage idempotency + live-wins"
+APP_REPO="$(mktemp -d -t continuum-synth-app.XXXXXX)"
+T41_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
+  import('$PLUGIN_DIR/lib/comms_dedupe.js').then((D) => {
+    const d = '$APP_REPO';
+    let bad = 0;
+    const eq = (a,b,label) => { if (a!==b) { console.log('FAIL',label,'got',a,'want',b); bad++; } };
+    const base = { provider:'whatsapp', accountId:'work', chatId:'c@g.us', fromMe:false, senderId:'19999999999@s.whatsapp.net', senderName:'Alice', tsIso:'2026-06-06T18:13:20Z', kind:'text', media:null, reply_to:null };
+    const withFp = (o) => ({ ...o, fingerprint: D.fingerprint(o) });
+
+    // first live append
+    const r1 = m.appendMessage(d, withFp({ ...base, msgId:'M1', ts:1717700000, text:'hi', source:'live' }));
+    eq(r1.appended, true, 'first-appended');
+    eq(m.readCursor(d,'whatsapp','work','c@g.us').count, 1, 'count-1');
+
+    // TIER 1: same (provider,accountId,chatId,msgId) re-delivery -> no-op
+    const r2 = m.appendMessage(d, withFp({ ...base, msgId:'M1', ts:1717700000, text:'hi', source:'live' }));
+    eq(r2.appended, false, 'tier1-dup-noop');
+    eq(r2.reason, 'duplicate-msgid', 'tier1-reason');
+    eq(m.readCursor(d,'whatsapp','work','c@g.us').count, 1, 'count-still-1');
+
+    // TIER 2: an IMPORT with same content+minute+sender (diff msgId) but a live
+    // record already present -> dropped (live wins). Same fingerprint as M1.
+    // ts:1717700030 is in the same minute as M1 (ts:1717700000) so fingerprints match.
+    const imp = withFp({ ...base, msgId:'import:zzz', ts:1717700030, text:'hi', source:'import' });
+    const r3 = m.appendMessage(d, imp);
+    eq(r3.appended, false, 'tier2-import-dropped');
+    eq(r3.reason, 'duplicate-fingerprint-live-wins', 'tier2-reason');
+    eq(m.readCursor(d,'whatsapp','work','c@g.us').count, 1, 'count-still-1-after-import-dup');
+
+    // a genuinely new message advances the cursor newest
+    const r4 = m.appendMessage(d, withFp({ ...base, msgId:'M2', ts:1717700100, text:'later', source:'live' }));
+    eq(r4.appended, true, 'second-appended');
+    const cur = m.readCursor(d,'whatsapp','work','c@g.us');
+    eq(cur.count, 2, 'count-2');
+    eq(cur.newestId, 'M2', 'newest-id');
+    eq(cur.newestTs, 1717700100, 'newest-ts');
+    eq(cur.oldestId, 'M1', 'oldest-id');
+    eq(cur.oldestTs, 1717700000, 'oldest-ts');
+
+    console.log(bad === 0 ? 'APPEND OK' : 'APPEND BAD ' + bad);
+  });
+});
+")
+echo "$T41_OUT" | grep -qF "APPEND OK" && ok "comms_store appendMessage dedupe + cursor + live-wins" || { fail "comms_store append: $T41_OUT"; }
+rm -rf "$APP_REPO"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
