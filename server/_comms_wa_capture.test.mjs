@@ -93,21 +93,45 @@ async function setup() {
   await fs.rm(dir, { recursive: true, force: true });
 }
 
-// 4) messaging-history.set -> backfill source, deduped against a live record.
+// 4a) messaging-history.set for a NEW message (no prior live) -> stored with source:'backfill'.
+//     This is the positive backfill capture path — previously untested.
 {
   const dir = await setup();
   const sock = mockSocket();
   const p = new WhatsAppProvider({ projectDirFor: () => dir });
   await p.connect(ACCOUNT, { makeSocket: () => sock });
-  // live first
-  sock._emit("messages.upsert", { type: "notify", messages: [waMsg({ id: "H1", text: "same line" })] });
-  await new Promise((r) => setTimeout(r, 10));
-  // history ships the same logical message (same id) -> idempotent
-  sock._emit("messaging-history.set", { messages: [waMsg({ id: "H1", text: "same line" })], isLatest: true });
+  // history-only message: no prior live delivery for this msgId.
+  sock._emit("messaging-history.set", { messages: [waMsg({ id: "BF1", text: "history only" })], isLatest: true });
   await new Promise((r) => setTimeout(r, 15));
 
   const slice = getSlice(dir, { provider: "whatsapp", accountId: ACCOUNT, chatId: ALLOWED });
-  assert.equal(slice.messages.length, 1, "history overlap with same msgId must dedupe");
+  assert.equal(slice.messages.length, 1, "history-only message must be stored");
+  assert.equal(slice.messages[0].source, "backfill", "history-only message must carry source:'backfill'");
+  assert.equal(slice.messages[0].text, "history only");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 4b) messaging-history.set overlaps a live message by CONTENT+MINUTE (same fingerprint)
+//     but uses a DIFFERENT msgId — exercises cross-source Tier-2 fingerprint dedup.
+//     Tier-1 passes (distinct msgIds). Tier-2 fires: existing record is 'live' (real),
+//     incoming backfill is also 'real' -> live wins, backfill is dropped. Only 1 record.
+{
+  const dir = await setup();
+  const sock = mockSocket();
+  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  await p.connect(ACCOUNT, { makeSocket: () => sock });
+  // live arrives first with msgId 'LIVE2'
+  sock._emit("messages.upsert", { type: "notify", messages: [waMsg({ id: "LIVE2", ts: 1717700000, text: "overlap msg" })] });
+  await new Promise((r) => setTimeout(r, 10));
+  // backfill ships the same logical message but with a DIFFERENT msgId 'BF2' (same ts + text)
+  // -> Tier-1 passes (different msgId); Tier-2 detects same fingerprint on a real/live record
+  //    and drops the backfill as a duplicate-fingerprint-live-wins.
+  sock._emit("messaging-history.set", { messages: [waMsg({ id: "BF2", ts: 1717700000, text: "overlap msg" })], isLatest: true });
+  await new Promise((r) => setTimeout(r, 15));
+
+  const slice = getSlice(dir, { provider: "whatsapp", accountId: ACCOUNT, chatId: ALLOWED });
+  assert.equal(slice.messages.length, 1, "backfill dup of live (same fp, diff msgId) must be deduplicated by Tier-2");
+  assert.equal(slice.messages[0].source, "live", "surviving record must be the live one");
   await fs.rm(dir, { recursive: true, force: true });
 }
 

@@ -76,17 +76,26 @@ export function appendMessage(projectDir, msg) {
       return { appended: false, reason: "duplicate-msgid" };
     }
   }
-  // Tier 2: CROSS-SOURCE identity by fingerprint. live/backfill win over import.
-  // Only fires when the incoming message and the existing record have different
-  // sources (one is live/backfill, the other is import). Same-source collisions
-  // (live-vs-live, import-vs-import) that cleared Tier 1 represent distinct
-  // real messages (different msgIds, same content/minute) and must NOT be
-  // suppressed — silent loss of a real user message.
-  const incomingIsReal = msg.source === "live" || msg.source === "backfill";
+  // Tier 2: CROSS-SOURCE identity by fingerprint. live wins over backfill and import.
+  // Fires when the incoming message and the existing record have different sources:
+  //   live vs. import  : live/backfill win over import (forward and reverse paths).
+  //   live vs. backfill: live is a real-time delivery; backfill is history re-sync.
+  //                      When the same fingerprint exists as both live+backfill with
+  //                      distinct msgIds, the live record wins and the backfill is
+  //                      dropped — they represent the same logical message delivered
+  //                      via two Baileys event paths.
+  // Same-source collisions (live-vs-live, backfill-vs-backfill, import-vs-import)
+  // that cleared Tier 1 represent genuinely distinct messages (different msgIds,
+  // same content/minute) and must NOT be suppressed — silent loss of real messages.
+  const incomingIsLive = msg.source === "live";
+  const incomingIsBackfill = msg.source === "backfill";
+  const incomingIsReal = incomingIsLive || incomingIsBackfill;
   const incomingIsImport = msg.source === "import";
   for (const e of existing) {
     if (e.fingerprint === fp) {
-      const existingIsReal = e.source === "live" || e.source === "backfill";
+      const existingIsLive = e.source === "live";
+      const existingIsBackfill = e.source === "backfill";
+      const existingIsReal = existingIsLive || existingIsBackfill;
       const existingIsImport = e.source === "import";
 
       if (existingIsReal && incomingIsImport) {
@@ -124,10 +133,42 @@ export function appendMessage(projectDir, msg) {
         });
         return { appended: true };
       }
-      // Same-source fingerprint collision (both live or both import) with a
-      // distinct msgId that cleared Tier 1: these are genuinely distinct messages
-      // (e.g. user sent 'ok' twice in the same minute). Do NOT suppress.
-      // Continue scanning for a different match; if none found, append.
+      if (existingIsLive && incomingIsBackfill) {
+        // Forward live-vs-backfill: live stored first, backfill history-sync arrives
+        // with a different msgId but same fingerprint -> drop backfill (live wins).
+        return { appended: false, reason: "duplicate-fingerprint-live-wins" };
+      }
+      if (existingIsBackfill && incomingIsLive) {
+        // Reverse live-vs-backfill: backfill stored first (history-set arrived before
+        // live delivery), live re-delivers with a different msgId -> supersede backfill
+        // with the live record (live wins unconditionally). Greedy 1:1: replace only
+        // the first matched backfill record to avoid over-broad removal.
+        const record = { ...msg, fingerprint: fp };
+        let superseded = false;
+        const withoutBackfill = existing.filter((r) => {
+          if (!superseded && r === e) { superseded = true; return false; }
+          return true;
+        });
+        const allReplaced = withoutBackfill.concat([record]);
+        const file = commsMessagesPath(projectDir, provider, accountId, chatId);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        atomicWrite(file, allReplaced.map((r) => JSON.stringify(r)).join("\n") + "\n");
+        let newest2 = allReplaced[0], oldest2 = allReplaced[0];
+        for (const r of allReplaced) {
+          if ((r.ts || 0) >= (newest2.ts || 0)) newest2 = r;
+          if ((r.ts || 0) <= (oldest2.ts || 0)) oldest2 = r;
+        }
+        writeCursor(projectDir, provider, accountId, chatId, {
+          newestId: newest2.msgId, newestTs: newest2.ts || 0,
+          oldestId: oldest2.msgId, oldestTs: oldest2.ts || 0,
+          count: allReplaced.length,
+        });
+        return { appended: true };
+      }
+      // Same-source fingerprint collision (live-vs-live, backfill-vs-backfill,
+      // import-vs-import) with a distinct msgId that cleared Tier 1: these are
+      // genuinely distinct messages (e.g. user sent 'ok' twice in the same minute).
+      // Do NOT suppress. Continue scanning; if none found, append.
     }
   }
 
