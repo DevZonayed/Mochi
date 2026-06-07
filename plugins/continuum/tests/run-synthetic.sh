@@ -1293,6 +1293,26 @@ import('$PLUGIN_DIR/lib/comms_state.js').then((m) => {
 echo "$T55_OUT" | grep -qF "STATE OK" && ok "comms_state writers + read side correct" || { fail "comms_state: $T55_OUT"; }
 rm -rf "$C55REPO"
 
+# ---- T56: session_start appends comms ignores to a PRE-EXISTING .gitignore ---
+echo
+echo "T56 — gitignore writer is idempotent-append (comms lines added to existing file)"
+G56REPO="$(mktemp -d -t continuum-synth-g56.XXXXXX)"
+git -C "$G56REPO" init -q
+# Pre-existing .continuum/.gitignore WITHOUT the comms lines (simulates a repo
+# bootstrapped before this change). Must keep its old lines AND gain comms ones.
+mkdir -p "$G56REPO/.continuum"
+printf '%s\n' "# Auto-written by continuum. Transient / page-derived data — do not commit." "verification/" "runs/" > "$G56REPO/.continuum/.gitignore"
+run_hook hooks/session_start.js "{\"session_id\":\"sg56\",\"cwd\":\"$G56REPO\",\"hook_event_name\":\"SessionStart\",\"source\":\"startup\"}" > /dev/null
+GI="$G56REPO/.continuum/.gitignore"
+grep -qxF "comms/*" "$GI" && ok "comms/* present after append" || fail "comms/* missing from existing .gitignore"
+grep -qxF "!comms/config.json" "$GI" && ok "!comms/config.json exception present" || fail "config.json exception missing"
+grep -qxF "verification/" "$GI" && ok "pre-existing lines preserved" || fail "pre-existing lines clobbered"
+# Idempotency: a SECOND session must not duplicate the comms lines.
+run_hook hooks/session_start.js "{\"session_id\":\"sg56b\",\"cwd\":\"$G56REPO\",\"hook_event_name\":\"SessionStart\",\"source\":\"startup\"}" > /dev/null
+DUP=$(grep -cxF "comms/*" "$GI")
+[ "$DUP" = "1" ] && ok "comms/* not duplicated on 2nd run" || fail "comms/* duplicated ($DUP times)"
+rm -rf "$G56REPO"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
