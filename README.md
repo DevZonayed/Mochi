@@ -136,14 +136,24 @@ at the same time — pick one.
 
 ## Tools (MCP)
 
-54 tools, grouped by purpose.
+55 tools, grouped by purpose.
+
+> **Notifications, not focus-stealing (0.5.0+).** Automation never raises the
+> Chrome window to the OS foreground on its own — it posts a click-to-focus
+> notification titled `Mochi · <project>` instead, so it won't yank you out of
+> your editor. Clicking the toast brings that session's window forward. The
+> agent can ping you on purpose via `browser_request_attention`. Requires a
+> one-time "reload unpacked extension" (new `notifications` permission); on
+> macOS, enable Google Chrome under System Settings → Notifications (the popup
+> walks you through it).
 
 ### Session + tabs
 
 | Tool | What it does |
 |---|---|
-| `browser_session_start` | New tab group + primary tab. Pass `newWindow:true` to spawn a fresh window. |
+| `browser_session_start` | New tab group + primary tab. Pass `newWindow:true` to spawn a fresh window. Posts a click-to-focus notification instead of stealing focus. |
 | `browser_session_end` | Detach debugger, ungroup or close session tabs. |
+| `browser_request_attention` | Post an OS notification asking the human to look (captcha, choice, or "done — come look"). Click focuses the window. |
 | `browser_navigate` | Navigate primary tab, wait for load. |
 | `browser_open_tab` | Open new tab inside the session group. |
 | `browser_list_tabs` | List session tabs + CDP attachment state. |
