@@ -92,10 +92,27 @@ export function appendMessage(projectDir, msg) {
       if (existingIsImport && incomingIsReal) {
         // Reverse live-wins: import stored first, live/backfill arrives later
         // (re-delivery overlap). Per spec §4.2 live wins unconditionally.
-        // Replace the import record by writing the live record; the import line
-        // stays in the JSONL (append-only), but the live record supersedes it.
-        // We DO append the live record so cursor/count advance correctly.
-        break; // fall through to append below
+        // Supersede the import record: rewrite the messages file without it,
+        // then append the live record in its place. The logical count stays
+        // the same (1 import replaced by 1 live); the duplicate import is removed
+        // so getSlice and cursor.count both reflect exactly ONE logical message.
+        const record = { ...msg, fingerprint: fp };
+        const withoutImport = existing.filter((r) => r.fingerprint !== fp || r.source === "live" || r.source === "backfill");
+        const allReplaced = withoutImport.concat([record]);
+        const file = commsMessagesPath(projectDir, provider, accountId, chatId);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        atomicWrite(file, allReplaced.map((r) => JSON.stringify(r)).join("\n") + "\n");
+        let newest2 = allReplaced[0], oldest2 = allReplaced[0];
+        for (const r of allReplaced) {
+          if ((r.ts || 0) >= (newest2.ts || 0)) newest2 = r;
+          if ((r.ts || 0) <= (oldest2.ts || 0)) oldest2 = r;
+        }
+        writeCursor(projectDir, provider, accountId, chatId, {
+          newestId: newest2.msgId, newestTs: newest2.ts || 0,
+          oldestId: oldest2.msgId, oldestTs: oldest2.ts || 0,
+          count: allReplaced.length,
+        });
+        return { appended: true };
       }
       // Same-source fingerprint collision (both live or both import) with a
       // distinct msgId that cleared Tier 1: these are genuinely distinct messages
