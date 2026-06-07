@@ -8,6 +8,49 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.5.0] — 2026-06-07
+
+### Changed
+
+- **Automation never steals OS focus.** `browser_session_start`'s
+  `bringToFront` default flips `true → false`. Instead of raising the Chrome
+  window to the foreground, the extension posts a **click-to-focus OS
+  notification** ("Automation started — click to bring the window forward").
+  The session tab is still made `active: true` within its window (no SPA
+  throttling). Pass `bringToFront: true` when you actually want to watch.
+  `chrome.notifications.onClicked` is the **only** path that raises a window.
+
+### Added
+
+- **`browser_request_attention({ reason, tabId?, urgent? })`** — a new MCP
+  tool the agent calls when it genuinely needs the human (suspected
+  captcha/login wall, an ambiguous choice, or "task finished — come look").
+  Posts a notification without stealing focus. **Tool count 54 → 55.**
+- **Automatic attention notifications** for the unambiguous cases: an
+  unrecoverable session loss, a native JS dialog (`alert`/`confirm`/`prompt`/
+  `beforeunload`), and a page crash. The dialog/crash hooks are pure
+  `chrome.debugger` observers — they send no CDP command, so native dialog
+  handling is unchanged.
+- **Project-named notifications.** Each toast is titled `Mochi · <project>`,
+  where the label is `basename(cwd)` of the per-project MCP server process,
+  injected into `session_start`. The same label now titles the tab group.
+- **Popup notifications section** — an OS-notifications on/off switch plus a
+  non-technical onboarding flow: a "Send test notification" button, a
+  "Did you see it? Yes / No" confirm, and (on No) a one-click **Open
+  notification settings** button that deep-links to the macOS Notifications
+  pane via a new broker route `POST /os/open-notification-settings`.
+
+### Notes
+
+- **Requires a one-time "reload unpacked extension"** — the new
+  `notifications` manifest permission must be granted.
+- **macOS:** a Chrome extension cannot read the System Settings notification
+  toggle, so the confirm-probe (test → "did you see it?") is the robust check.
+  If toasts don't appear, enable **Google Chrome** under System Settings →
+  Notifications.
+
+---
+
 ## [0.4.1] — 2026-05-20
 
 ### Fixed
