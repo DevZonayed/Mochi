@@ -1324,6 +1324,11 @@ EMITS=$(echo "$F57_OUT" | grep -oF '"hookSpecificOutput"' | wc -l | tr -d ' ')
 [ "$EMITS" = "1" ] && ok "exactly one emit on first session" || fail "expected 1 emit got $EMITS"
 F57_CTX="$(echo "$F57_OUT" | extract_ctx)"
 echo "$F57_CTX" | grep -q "No context chain" && ok "bootstrap directive still present via accumulator" || fail "bootstrap directive lost in refactor"
+# Task-30 co-emission contract: a fresh (un-bootstrapped) AND undecided repo must emit
+# BOTH the bootstrap directive AND the comms ASK in the same single context payload.
+# This locks down the wiring of commsGate into the accumulator so a regression that
+# dropped the comms clause (or re-introduced an early-exit before commsGate runs) is caught.
+echo "$F57_CTX" | grep -q "hasn't decided about communication-channel sync" && ok "comms ASK co-emitted with bootstrap directive in one payload" || fail "comms ASK missing from fresh-repo context (Task-30 co-emission contract broken)"
 rm -rf "$F57REPO"
 
 # ---- T58: comms gate branches (ASK source-aware / declined / onboard / fresh) -
@@ -1346,8 +1351,13 @@ mk_gate_repo() {  # bootstrapped repo so commsGate is reached
 GA="$(mk_gate_repo)"
 # no comms/config.json → undecided
 gate_ctx "$GA" startup | grep -q "hasn't decided about communication-channel sync" && ok "ASK emitted on startup when undecided" || fail "ASK missing on startup"
+# (a2) undecided + clear → ASK (clear is the second ASK-triggering source; a future edit
+#      that drops 'clear' from the condition would remove this source-aware contract).
+gate_ctx "$GA" clear | grep -q "hasn't decided about communication-channel sync" && ok "ASK emitted on clear when undecided" || fail "ASK missing on clear (source-aware contract broken)"
 # (b) undecided + resume → silent (no ASK)
 gate_ctx "$GA" resume | grep -q "hasn't decided about communication-channel sync" && fail "ASK wrongly emitted on resume" || ok "silent on resume when undecided"
+# (b2) undecided + compact → silent (no ASK)
+gate_ctx "$GA" compact | grep -q "hasn't decided about communication-channel sync" && fail "ASK wrongly emitted on compact" || ok "silent on compact when undecided"
 rm -rf "$GA"
 
 # (c) declined → silent on startup
@@ -1365,6 +1375,15 @@ echo '{"whatsapp":{"work":{"status":"needs_login","updatedAt":1717700000}}}' > "
 gate_ctx "$GC" startup | grep -q "comms-setup" && ok "onboard directive emitted when account needs_login" || fail "onboard missing for needs_login"
 rm -rf "$GC"
 
+# (d2) decided + enabled but NO providers configured → distinct "no provider linked yet" ONBOARD message
+# (covers the configured.length === 0 branch — different message text from the needs_login branch).
+GC2="$(mk_gate_repo)"
+echo '{"version":1,"decided":true,"declined":false,"providers":{}}' > "$GC2/.continuum/comms/config.json"
+GC2CTX="$(gate_ctx "$GC2" startup)"
+echo "$GC2CTX" | grep -q "comms-setup" && ok "onboard emitted when decided+enabled but no provider configured" || fail "onboard missing when no provider configured"
+echo "$GC2CTX" | grep -q "no provider is linked yet" && ok "onboard text is the 'no provider' variant (not needs_login text)" || fail "expected 'no provider is linked yet' message text"
+rm -rf "$GC2"
+
 # (e) decided + connected + new messages → freshness note
 GD="$(mk_gate_repo)"
 echo '{"version":1,"decided":true,"declined":false,"providers":{"whatsapp":{"accounts":{"work":{"capture":"session","mode":"strict","allowed_jids":["123@g.us"]}}}}}' > "$GD/.continuum/comms/config.json"
@@ -1375,6 +1394,22 @@ echo '{"newestId":"m9","newestTs":1717800000,"oldestId":"m1","oldestTs":17177000
 echo '{"whatsapp/work/123@g.us":1717700500}' > "$GD/.continuum/comms/.last-session-seen.json"
 gate_ctx "$GD" startup | grep -qi "new message" && ok "freshness note emitted when cursor ahead of watermark" || fail "freshness note missing"
 rm -rf "$GD"
+
+# (e2) decided + connected + NO new messages (watermark at/ahead of cursor) → silent
+# Negative assertion: a regression that made the freshness note always-fire (or always-silent)
+# would break this. Cursor newestTs == watermark means nothing new since last session.
+GE="$(mk_gate_repo)"
+echo '{"version":1,"decided":true,"declined":false,"providers":{"whatsapp":{"accounts":{"work":{"capture":"session","mode":"strict","allowed_jids":["123@g.us"]}}}}}' > "$GE/.continuum/comms/config.json"
+echo '{"whatsapp":{"work":{"status":"connected","updatedAt":1717700000}}}' > "$GE/.continuum/comms/state.json"
+mkdir -p "$GE/.continuum/comms/store/whatsapp/work/123@g.us"
+echo '{"newestId":"m9","newestTs":1717800000,"oldestId":"m1","oldestTs":1717700000,"count":9}' > "$GE/.continuum/comms/store/whatsapp/work/123@g.us/cursor.json"
+# watermark AT the cursor newestTs → no new messages since last session
+echo '{"whatsapp/work/123@g.us":1717800000}' > "$GE/.continuum/comms/.last-session-seen.json"
+GE_CTX="$(gate_ctx "$GE" startup)"
+echo "$GE_CTX" | grep -qi "new message" && fail "freshness note wrongly fired when watermark == cursor newestTs (silent branch broken)" || ok "silent when watermark at cursor (no new messages)"
+# Also confirm no ASK or onboard sneaks in (we are decided+enabled+connected).
+echo "$GE_CTX" | grep -q "hasn't decided about communication-channel sync" && fail "ASK appeared in decided+connected context" || ok "no spurious ASK when decided+connected+current"
+rm -rf "$GE"
 
 # ---- Summary -----------------------------------------------------------------
 echo
