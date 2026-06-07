@@ -24,16 +24,22 @@ export function normalizeJid(jid) {
 function accountAllowed(cfg, provider, accountId) {
   const acct = cfg?.providers?.[provider]?.accounts?.[accountId];
   if (!acct || !Array.isArray(acct.allowed_jids)) return new Set();
-  return new Set(acct.allowed_jids.map(normalizeJid));
+  // filter(Boolean) drops entries that normalize to "" so a blank/whitespace
+  // entry in allowed_jids cannot grant access to null/empty/garbage chatIds.
+  return new Set(acct.allowed_jids.map(normalizeJid).filter(Boolean));
 }
 
 // isAllowed: strict membership of the normalized jid in this account's
 // allowed_jids. Allowing a @g.us grants ONLY that group chat (its chatId);
 // a member's 1:1 DM still needs that member's own JID listed (§6.4 m5).
 export function isAllowed(cfg, provider, accountId, jid) {
+  const norm = normalizeJid(jid);
+  // An empty normalized jid can never be allowlisted — reject early so that a
+  // null/garbage chatId on the write path never slips past this guard.
+  if (!norm) return false;
   const allowed = accountAllowed(cfg, provider, accountId);
   if (allowed.size === 0) return false;
-  return allowed.has(normalizeJid(jid));
+  return allowed.has(norm);
 }
 
 // assertAllowed: returns the normalized jid if allowed, else throws. Used on
