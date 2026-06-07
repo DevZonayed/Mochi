@@ -65,8 +65,14 @@ export function reconcileImport(existingMsgs, importMsgs) {
     if (ordinal < cap) continue; // matched a live/backfill record — live wins
 
     // Unmatched (N>M): mint a NEW import record. Ordinal lives in msgId only.
+    // content mirrors bucketKey so msgId uniqueness tracks bucket identity
+    // (fixes silent-loss bug: two media-only records with different mediaKeys
+    // but no text would otherwise produce identical synthetic msgIds).
     const sender = normalizeJid(raw.senderId || "");
-    const msgId = "import:" + sha1(`${raw.chatId || ""}|${raw.ts}|${ordinal}|${sender}|${raw.text || ""}`);
+    const content = (raw.text && raw.text.length)
+      ? raw.text
+      : (raw.media && raw.media.mediaKey ? raw.media.mediaKey : "");
+    const msgId = "import:" + sha1(`${raw.chatId || ""}|${raw.ts}|${ordinal}|${sender}|${content}`);
     const rec = { ...raw, msgId, source: "import" };
     added.push(rec);
   }
