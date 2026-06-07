@@ -115,3 +115,43 @@ export function estimateTokens(text) {
   if (!text) return 0;
   return Math.ceil(text.length / 4);
 }
+
+// ---------------------------------------------------------------------------
+// Comms (per-repo communication-channel sync) path helpers. All persistence
+// lives under .continuum/comms/ (resolved per spec §3.1 from an explicit
+// projectDir — never process.cwd()). config.json is COMMITTED; everything
+// else under comms/ is gitignored (auth, store, state, watermark, local cfg).
+// ---------------------------------------------------------------------------
+export function commsDir(projectDir) {
+  return path.join(continuumRoot(projectDir), "comms");
+}
+export function commsConfigPath(projectDir) {
+  return path.join(commsDir(projectDir), "config.json");
+}
+export function commsLocalConfigPath(projectDir) {
+  return path.join(commsDir(projectDir), "config.local.json");
+}
+export function commsStatePath(projectDir) {
+  return path.join(commsDir(projectDir), "state.json");
+}
+export function commsSeenPath(projectDir) {
+  return path.join(commsDir(projectDir), ".last-session-seen.json");
+}
+export function commsIndexPath(projectDir) {
+  return path.join(commsDir(projectDir), "index.jsonl");
+}
+export function commsAuthDir(projectDir, provider, accountId) {
+  return path.join(commsDir(projectDir), provider, accountId, "auth");
+}
+export function commsChatDir(projectDir, provider, accountId, chatId) {
+  return path.join(commsDir(projectDir), "store", provider, accountId, chatId);
+}
+export function commsMessagesPath(projectDir, provider, accountId, chatId) {
+  return path.join(commsChatDir(projectDir, provider, accountId, chatId), "messages.jsonl");
+}
+export function commsCursorPath(projectDir, provider, accountId, chatId) {
+  return path.join(commsChatDir(projectDir, provider, accountId, chatId), "cursor.json");
+}
+export function commsMetaPath(projectDir, provider, accountId, chatId) {
+  return path.join(commsChatDir(projectDir, provider, accountId, chatId), "meta.json");
+}
