@@ -12,7 +12,6 @@ import {
   readStateMd,
   readConfig,
   estimateTokens,
-  commsConfigPath,
   commsCursorPath,
 } from "../lib/paths.js";
 import { readSentinel } from "../lib/archive.js";
