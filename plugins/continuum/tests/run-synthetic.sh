@@ -899,6 +899,57 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
 echo "$T41_OUT" | grep -qF "APPEND OK" && ok "comms_store appendMessage dedupe + cursor + live-wins" || { fail "comms_store append: $T41_OUT"; }
 rm -rf "$APP_REPO"
 
+# ---- T42: comms_store getSlice — sort/clamp/byte-budget/continuation -------
+echo
+echo "T42 — comms_store getSlice caps + continuation"
+SL_REPO="$(mktemp -d -t continuum-synth-sl.XXXXXX)"
+T42_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
+  import('$PLUGIN_DIR/lib/comms_dedupe.js').then((D) => {
+    const d = '$SL_REPO';
+    let bad = 0;
+    const eq = (a,b,label) => { if (a!==b) { console.log('FAIL',label,'got',a,'want',b); bad++; } };
+    const base = { provider:'whatsapp', accountId:'work', chatId:'c@g.us', fromMe:false, senderId:'19999999999@s.whatsapp.net', senderName:'Alice', kind:'text', media:null, reply_to:null, source:'live' };
+    // append 50 messages, ts 1000..1049 (insert OUT of order to prove read-sort)
+    const order = [...Array(50).keys()].sort(()=>0); // 0..49
+    for (const i of [25,0,49,10,...order]) {
+      const o = { ...base, msgId:'M'+i, ts:1000+i, tsIso:new Date((1000+i)*1000).toISOString(), text:'msg '+i };
+      m.appendMessage(d, { ...o, fingerprint: D.fingerprint(o) });
+    }
+
+    // default limit 20, newest-first (ts desc)
+    const s = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us' });
+    eq(s.messages.length, 20, 'default-limit-20');
+    eq(s.messages[0].msgId, 'M49', 'newest-first');
+    eq(s.messages[19].msgId, 'M30', '20th-is-M30');
+
+    // HARD max clamp: ask for 9999 -> clamped to 200 (only 50 exist here)
+    const big = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', limit:9999 });
+    eq(big.limitApplied, 200, 'hard-clamp-200');
+    eq(big.messages.length, 50, 'returns-all-50-under-cap');
+
+    // byte budget: a tiny budget truncates and hands back a continuation cursor
+    const tiny = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', limit:200, byteBudget:300 });
+    eq(tiny.messages.length < 50, true, 'byte-budget-truncates');
+    eq(typeof tiny.continuation === 'string' && tiny.continuation.length > 0, true, 'continuation-emitted');
+
+    // continuation paging: next page resumes strictly older than last returned
+    const lastTs = tiny.messages[tiny.messages.length-1].ts;
+    const page2 = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', limit:200, continuation: tiny.continuation });
+    eq(page2.messages.every(x => x.ts < lastTs), true, 'continuation-resumes-older');
+
+    // empty chat -> empty slice, no continuation, no throw
+    const empty = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'absent@g.us' });
+    eq(empty.messages.length, 0, 'empty-chat');
+    eq(empty.continuation, null, 'empty-no-continuation');
+
+    console.log(bad === 0 ? 'SLICE OK' : 'SLICE BAD ' + bad);
+  });
+});
+")
+echo "$T42_OUT" | grep -qF "SLICE OK" && ok "comms_store getSlice sort/clamp/byte-budget/continuation" || { fail "comms_store slice: $T42_OUT"; }
+rm -rf "$SL_REPO"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"

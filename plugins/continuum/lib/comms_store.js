@@ -11,6 +11,7 @@ import {
   commsChatDir,
   commsMessagesPath,
   commsCursorPath,
+  estimateTokens,
 } from "./paths.js";
 import { fingerprint } from "./comms_dedupe.js";
 
@@ -146,4 +147,56 @@ export function appendMessage(projectDir, msg) {
   });
 
   return { appended: true };
+}
+
+const DEFAULT_LIMIT = 20;
+const HARD_MAX_LIMIT = 200;     // §4.3 — over-limit requests are CLAMPED, not honored
+const DEFAULT_BYTE_BUDGET = 16 * 1024; // ~16 KB per response (§4.3)
+
+// getSlice: latest-N (or windowed) read of a chat. Order is reconstructed at
+// READ time by ts DESC (newest-first) by default. Caps are server-side
+// invariants: limit defaults to 20, is HARD-clamped to 200, and the response
+// is truncated to a byte budget with a `continuation` cursor for the next page.
+// `continuation` is an opaque "before this ts/msgId" cursor (we encode ts:msgId).
+export function getSlice(projectDir, opts) {
+  const { provider, accountId, chatId } = opts;
+  const limitApplied = Math.min(
+    HARD_MAX_LIMIT,
+    Number.isFinite(opts.limit) && opts.limit > 0 ? Math.floor(opts.limit) : DEFAULT_LIMIT
+  );
+  const byteBudget = Number.isFinite(opts.byteBudget) && opts.byteBudget > 0
+    ? opts.byteBudget : DEFAULT_BYTE_BUDGET;
+
+  let all = readAllMessages(projectDir, provider, accountId, chatId);
+  // newest-first by ts; msgId is a stable tiebreaker for equal ts.
+  all.sort((a, b) => (b.ts || 0) - (a.ts || 0) || String(b.msgId).localeCompare(String(a.msgId)));
+
+  // continuation: resume strictly older than the encoded cursor.
+  if (typeof opts.continuation === "string" && opts.continuation.includes(":")) {
+    const sep = opts.continuation.indexOf(":");
+    const curTs = Number(opts.continuation.slice(0, sep));
+    const curId = opts.continuation.slice(sep + 1);
+    all = all.filter((m) =>
+      (m.ts || 0) < curTs || ((m.ts || 0) === curTs && String(m.msgId).localeCompare(curId) < 0)
+    );
+  }
+
+  const out = [];
+  let bytes = 0;
+  let continuation = null;
+  for (const m of all) {
+    if (out.length >= limitApplied) {
+      continuation = `${out[out.length - 1].ts}:${out[out.length - 1].msgId}`;
+      break;
+    }
+    const sz = estimateTokens(JSON.stringify(m)); // estimated tokens
+    if (out.length > 0 && bytes + sz > byteBudget) {
+      continuation = `${out[out.length - 1].ts}:${out[out.length - 1].msgId}`;
+      break;
+    }
+    out.push(m);
+    bytes += sz;
+  }
+
+  return { messages: out, limitApplied, continuation };
 }
