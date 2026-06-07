@@ -36,6 +36,86 @@ const tabOwner = new Map();
 // tabId → true (we hold a chrome.debugger attachment to this tab)
 const attachedTabs = new Set();
 
+// ---------------- notifications (0.5.0: focus on click, never auto-steal) ----
+// notificationId → { clientId, windowId?, tabId? }. Clicking a notification is
+// the ONLY path that raises a window to the OS foreground.
+const notifTargets = new Map();
+
+// User prefs for OS notifications, mirrored from chrome.storage.local.
+const notifPrefs = { enabled: true, verified: false };
+chrome.storage.local.get(["notifEnabled", "notifVerified"]).then((o) => {
+  if (typeof o.notifEnabled === "boolean") notifPrefs.enabled = o.notifEnabled;
+  if (typeof o.notifVerified === "boolean") notifPrefs.verified = o.notifVerified;
+}).catch(() => {});
+
+// Post an OS notification for a session. Never raises the window — that only
+// happens if the user clicks (see chrome.notifications.onClicked below).
+// When notifications are off we just no-op: a toolbar badge would collide with
+// the painted status dot in the icon and never reliably clear, so it's worse
+// than nothing.
+async function notify(clientId, { kind = "info", message = "", requireInteraction = false } = {}) {
+  if (!notifPrefs.enabled) return false;
+  const s = clientId ? sessions.get(clientId) : null;
+  const label = (s && s.label) || "Mochi";
+  const notificationId = `mochi:${clientId || "global"}:${kind}`;
+  try {
+    await chrome.notifications.create(notificationId, {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("icons/mochi-128.png"),
+      title: `Mochi · ${label}`,
+      message: String(message || "").slice(0, 250),
+      requireInteraction: !!requireInteraction,
+      priority: requireInteraction ? 2 : 0,
+    });
+    notifTargets.set(notificationId, s
+      ? { clientId, windowId: s.windowId, tabId: s.primaryTabId }
+      : { clientId });
+    return true;
+  } catch { return false; }
+}
+
+// Recover the focus target for a notification whose in-memory entry was lost to
+// an MV3 service-worker eviction. The id encodes the clientId; persisted session
+// state (windowId/primaryTabId) is rehydrated by restoreSessions().
+async function resolveNotifTarget(id) {
+  const direct = notifTargets.get(id);
+  if (direct) return direct;
+  const parts = String(id).split(":");
+  if (parts[0] !== "mochi" || parts.length < 3) return null;
+  const clientId = parts.slice(1, -1).join(":");
+  if (!clientId || clientId === "global") return null;
+  try { await restoreSessions(); } catch {}
+  const s = sessions.get(clientId);
+  return s ? { clientId, windowId: s.windowId, tabId: s.primaryTabId } : null;
+}
+
+chrome.notifications.onClicked.addListener(async (id) => {
+  const target = await resolveNotifTarget(id);
+  try { await chrome.notifications.clear(id); } catch {}
+  notifTargets.delete(id);
+  if (!target) return;
+  if (target.windowId != null) {
+    try { await chrome.windows.update(target.windowId, { focused: true }); } catch {}
+  }
+  if (target.tabId != null) {
+    try { await chrome.tabs.update(target.tabId, { active: true }); } catch {}
+  }
+});
+chrome.notifications.onClosed.addListener((id) => { notifTargets.delete(id); });
+
+// Drop any lingering notifications/targets for a session that's ending, so a
+// later click can't resolve to a torn-down window/tab.
+function clearClientNotifications(clientId) {
+  if (!clientId) return;
+  const prefix = `mochi:${clientId}:`;
+  for (const id of [...notifTargets.keys()]) {
+    if (id.startsWith(prefix)) {
+      notifTargets.delete(id);
+      try { chrome.notifications.clear(id); } catch {}
+    }
+  }
+}
+
 // Diagnostic logger. Two sinks: SW DevTools console (for live tailing) and a
 // ring buffer in chrome.storage.local (survives SW restarts so we can see the
 // full attach/detach history even when MV3 unloads the worker between events).
@@ -218,6 +298,7 @@ function serializeSessions() {
     primaryTabId: s.primaryTabId,
     tabIds: [...s.tabIds],
     ownsWindow: !!s.ownsWindow,
+    label: s.label,
     visuals: s.visuals,
   }));
 }
@@ -286,6 +367,7 @@ async function restoreSessions() {
         primaryTabId,
         tabIds: new Set(validIds),
         ownsWindow: !!raw.ownsWindow,
+        label: raw.label,
         visuals: raw.visuals && typeof raw.visuals === "object"
           ? { ...DEFAULT_VISUALS, ...raw.visuals }
           : { ...DEFAULT_VISUALS },
@@ -416,6 +498,7 @@ async function ensureAttached(tabId) {
   try { await chrome.debugger.sendCommand({ tabId }, "Page.enable"); } catch {}
   try { await chrome.debugger.sendCommand({ tabId }, "Runtime.enable"); } catch {}
   try { await chrome.debugger.sendCommand({ tabId }, "Network.enable"); } catch {}
+  try { await chrome.debugger.sendCommand({ tabId }, "Inspector.enable"); } catch {}
   // Re-apply a sticky cache-off (navigate {disableCache:true}) — CDP loses it on
   // every re-attach, so without this a heal/SW-restart silently re-enables cache.
   if (cacheDisabledTabs.has(tabId)) {
@@ -642,6 +725,32 @@ chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
           col: ex?.columnNumber ?? null,
           source: "exception",
         });
+        break;
+      }
+      // Pure observers — they send no CDP command, so native dialog handling
+      // and crash behavior are unchanged; we only surface a notification.
+      case "Page.javascriptDialogOpening": {
+        const cid = tabOwner.get(tabId);
+        if (cid) {
+          const kindLabel = params?.type ? params.type : "dialog";
+          const msg = params?.message ? String(params.message).slice(0, 160) : "";
+          notify(cid, {
+            kind: "dialog",
+            message: `The page opened a ${kindLabel}${msg ? `: ${msg}` : ""}. Click to take a look.`,
+            requireInteraction: true,
+          }).catch(() => {});
+        }
+        break;
+      }
+      case "Inspector.targetCrashed": {
+        const cid = tabOwner.get(tabId);
+        if (cid) {
+          notify(cid, {
+            kind: "crash",
+            message: "The page crashed. Click to take a look.",
+            requireInteraction: true,
+          }).catch(() => {});
+        }
         break;
       }
       case "Network.requestWillBeSent": {
@@ -898,7 +1007,14 @@ async function dispatchWithAutoRecover(type, p, clientId) {
     if (!msg.includes("no active session")) throw e;
     if (LIFECYCLE_COMMANDS.has(type)) throw e;
     const cfg = await getCachedSessionConfig(clientId);
-    if (!cfg) throw e;
+    if (!cfg) {
+      notify(clientId, {
+        kind: "error",
+        message: "The browser session was lost and could not be restored. Click to check.",
+        requireInteraction: true,
+      }).catch(() => {});
+      throw e;
+    }
     await sessionStart(cfg, clientId);
     const result = await dispatch(type, p, clientId);
     // Tag the result so the caller (and traces) can see the auto-recovery.
@@ -935,6 +1051,7 @@ async function dispatch(type, p, clientId) {
   switch (type) {
     case "session_start":      return sessionStart(p, clientId);
     case "session_end":        return sessionEnd(p, clientId);
+    case "request_attention":  return requestAttention(p, clientId);
     case "client_cleanup":     return clientCleanup(clientId);
     case "navigate":           return navigate(p, clientId);
     case "open_tab":           return openTab(p, clientId);
@@ -979,7 +1096,8 @@ async function sessionStart(input = {}, clientId) {
   const {
     title = "AI Session", color = "blue", url = "about:blank",
     newWindow = false, width, height, left, top, state,
-    bringToFront = true,
+    bringToFront = false,
+    label,
     visuals,
   } = input;
   if (!clientId) throw new Error("session_start: missing clientId");
@@ -1029,11 +1147,24 @@ async function sessionStart(input = {}, clientId) {
     primaryTabId: tab.id,
     tabIds: new Set([tab.id]),
     ownsWindow: !!newWindow,
+    // Human label (project name) for notifications. Server injects `label`;
+    // fall back to a custom title or a clientId suffix for older callers.
+    label: label || (title && title !== "AI Session" ? title : `Session ${clientId.slice(-4)}`),
     visuals: await resolveVisualsConfig(visuals),
   };
   sessions.set(clientId, session);
   tabOwner.set(tab.id, clientId);
   schedulePersistSessions();
+
+  // 0.5.0: announce via a click-to-focus notification instead of stealing OS
+  // focus. When bringToFront is true the window was already raised above, so
+  // skip the toast.
+  if (!bringToFront) {
+    notify(clientId, {
+      kind: "start",
+      message: "Automation started — click to bring the window forward.",
+    }).catch(() => {});
+  }
 
   // Don't block the session_start response on a slow page — the session is
   // already committed (tab exists, group exists, state is recorded). If the
@@ -1083,6 +1214,7 @@ async function sessionEnd({ closeTabs = false } = {}, clientId) {
   // Remove ownership map entries (listeners may also do this — idempotent).
   for (const id of ids) tabOwner.delete(id);
   sessions.delete(clientId);
+  clearClientNotifications(clientId);
   schedulePersistSessions();
   // Explicit end → don't auto-restart on the next command.
   await clearCachedSessionConfig(clientId);
@@ -1111,6 +1243,22 @@ async function forceCleanupClient(clientId) {
     await detachIfAttached(tabId);
     tabOwner.delete(tabId);
   }
+}
+
+// Agent-triggered: post a notification asking the human to look. Does not raise
+// the window — the user clicks the toast to focus (chrome.notifications.onClicked).
+async function requestAttention({ reason, tabId, urgent = true } = {}, clientId) {
+  const s = clientId ? sessions.get(clientId) : null;
+  const shown = await notify(clientId, {
+    kind: "attention",
+    message: reason || "Mochi needs your attention.",
+    requireInteraction: urgent !== false,
+  });
+  // If a specific tab was named, point the click target at it.
+  if (s && tabId != null && s.tabIds.has(tabId)) {
+    notifTargets.set(`mochi:${clientId}:attention`, { clientId, windowId: s.windowId, tabId });
+  }
+  return { ok: true, notified: shown, hasSession: !!s, reason: reason ?? null };
 }
 
 async function navigate({ url, tabId, bringToFront = false, hardReload = false, disableCache = false } = {}, clientId) {
@@ -2791,6 +2939,48 @@ chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
         sendResponse({ ended: ids.length });
       } else if (req?.type === "popup_get_claude_sessions") {
         sendResponse({ sessions: claudeSessionsCache });
+      } else if (req?.type === "popup_notif_status") {
+        let permission = "granted";
+        try { permission = await new Promise((r) => chrome.notifications.getPermissionLevel(r)); } catch {}
+        sendResponse({ enabled: notifPrefs.enabled, verified: notifPrefs.verified, permission });
+      } else if (req?.type === "popup_set_notif_enabled") {
+        notifPrefs.enabled = !!req.enabled;
+        await chrome.storage.local.set({ notifEnabled: notifPrefs.enabled });
+        if (notifPrefs.enabled) { try { chrome.action.setBadgeText({ text: "" }); } catch {} }
+        sendResponse({ enabled: notifPrefs.enabled });
+      } else if (req?.type === "popup_set_notif_verified") {
+        notifPrefs.verified = !!req.verified;
+        await chrome.storage.local.set({ notifVerified: notifPrefs.verified });
+        // The test toast has served its purpose — clear it so it doesn't linger.
+        try { await chrome.notifications.clear("mochi:global:test"); } catch {}
+        notifTargets.delete("mochi:global:test");
+        sendResponse({ verified: notifPrefs.verified });
+      } else if (req?.type === "popup_send_test_notification") {
+        let ok = false;
+        try {
+          // Re-creating with the same id only UPDATES an existing toast and may
+          // not re-pop a visible banner — clear first so the retry always shows.
+          try { await chrome.notifications.clear("mochi:global:test"); } catch {}
+          await chrome.notifications.create("mochi:global:test", {
+            type: "basic",
+            iconUrl: chrome.runtime.getURL("icons/mochi-128.png"),
+            title: "Mochi · Test",
+            message: "If you can see this, notifications are working! 🎉",
+            requireInteraction: false,
+          });
+          notifTargets.set("mochi:global:test", {});
+          ok = true;
+        } catch {}
+        sendResponse({ ok });
+      } else if (req?.type === "popup_open_os_notification_settings") {
+        let ok = false;
+        try {
+          const origin = WS_URL.replace(/^ws/, "http");
+          const r = await fetch(`${origin}/os/open-notification-settings`, { method: "POST" });
+          const body = await r.json().catch(() => ({}));
+          ok = r.ok && body.ok !== false;
+        } catch {}
+        sendResponse({ ok });
       } else if (req?.type === "popup_send_claude_message") {
         const sessionId = req.sessionId;
         const message = String(req.message ?? "").trim();

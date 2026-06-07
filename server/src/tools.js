@@ -29,6 +29,11 @@ let lastKnownUrl = null;     // most recent URL we saw from any action
 let activeOrigin = null;     // origin derived from lastKnownUrl
 const serverStartedAt = Date.now();
 
+// Human label for notifications + tab-group title. Each project gets its own
+// MCP server process launched with cwd = project root, so basename(cwd) is a
+// reliable per-project name even though one shared broker serves all projects.
+const PROJECT_LABEL = path.basename(process.cwd()) || "Mochi";
+
 const DEFAULT_SNAPSHOT_MODE = "compact";
 const DEFAULT_SNAPSHOT_SCOPE = "viewport";
 const DEFAULT_SNAPSHOT_MAX_BYTES = 12000;
@@ -59,7 +64,7 @@ export const tools = [
   {
     name: "browser_session_start",
     description:
-      "Start a new browser session. Creates a Chrome tab group with an initial tab; all subsequent operations are scoped to that group. Pass newWindow=true to spawn a fresh Chrome window so window-resize won't disturb the user's other tabs. By default the new window is brought to OS foreground once (so the user sees automation has started) — subsequent browser_navigate calls do NOT steal focus (default changed in 0.4.1). Pass bringToFront:false to start fully in the background. Idempotent: ends a previous session first.",
+      "Start a new browser session. Creates a Chrome tab group with an initial tab; all subsequent operations are scoped to that group. Pass newWindow=true to spawn a fresh Chrome window so window-resize won't disturb the user's other tabs. By default automation does NOT raise the Chrome window to the OS foreground — instead the extension posts a click-to-focus notification (the user clicks it to bring the window forward). The tab is always made active within its window (prevents Chrome throttling). Pass bringToFront:true to force the window forward (e.g. when you want to watch). Idempotent: ends a previous session first.",
     inputSchema: {
       type: "object",
       properties: {
@@ -70,7 +75,7 @@ export const tools = [
         width:  { type: "number" }, height: { type: "number" },
         left:   { type: "number" }, top: { type: "number" },
         state:  { type: "string", enum: ["normal","maximized","minimized","fullscreen"] },
-        bringToFront: { type: "boolean", default: true, description: "On session start, raise the new window to OS foreground once. The tab is always made active within its window regardless (prevents Chrome throttling). Default true so users see automation has started; pass false for fully-silent background start." },
+        bringToFront: { type: "boolean", default: false, description: "Raise the new window to OS foreground on start (steals keyboard focus). Default false in 0.5.0+ — a click-to-focus notification is posted instead. The tab is always made active within its window regardless (prevents Chrome throttling)." },
         visuals: {
           type: "object",
           description: "Visual feedback layer (animated cursor + target ring + HUD). Defaults: enabled with cursor + hud; slowMo:0.",
@@ -88,6 +93,20 @@ export const tools = [
     name: "browser_session_end",
     description: "End the current session. Detaches debugger, ungroups tabs (default) or closes them.",
     inputSchema: { type: "object", properties: { closeTabs: { type: "boolean", default: false } } },
+  },
+  {
+    name: "browser_request_attention",
+    description:
+      "Post an OS notification asking the human to look at this browser session — e.g. a suspected captcha/login wall, an ambiguous choice you want them to make, or 'task finished — come look'. Does NOT steal focus; the user clicks the notification to bring the window forward. Use sparingly — only when you genuinely need the human or want them to see a result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        reason: { type: "string", description: "Short message shown in the notification." },
+        tabId:  { type: "number", description: "Optional tab to focus when the user clicks the notification." },
+        urgent: { type: "boolean", default: true, description: "Keep the notification on screen until the user acts (requireInteraction)." },
+      },
+      required: ["reason"],
+    },
   },
 
   // --- navigation + tabs ---
@@ -841,6 +860,7 @@ export const tools = [
 const TOOL_TO_WS_TYPE = {
   browser_session_start: "session_start",
   browser_session_end: "session_end",
+  browser_request_attention: "request_attention",
   browser_navigate: "navigate",
   browser_open_tab: "open_tab",
   browser_list_tabs: "list_tabs",
@@ -1348,7 +1368,12 @@ async function runWireTool(bridge, name, args) {
     trace.reset();
     activeOrigin = null;
     lastKnownUrl = null;
-    const result = await bridge.send(wsType, args);
+    // Inject the project label so the extension can title the tab group + name
+    // notifications after the project this MCP process belongs to.
+    const startArgs = { ...args };
+    if (!startArgs.title) startArgs.title = PROJECT_LABEL;
+    startArgs.label = startArgs.label || startArgs.title || PROJECT_LABEL;
+    const result = await bridge.send(wsType, startArgs);
     trace.reset(result.sessionId);
     return result;
   }

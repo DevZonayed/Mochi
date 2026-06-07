@@ -26,6 +26,7 @@ const want = [
   "browser_playbook_export",
   "browser_playbook_import",
   "browser_playbook_dashboard",
+  "browser_request_attention",
 ];
 const names = tools.map(t => t.name);
 for (const w of want) {
@@ -47,6 +48,17 @@ if (props.mode.default !== "compact" || props.scope.default !== "viewport" || pr
   console.error("snapshot defaults are not compact-safe:", props); process.exit(1);
 }
 console.log("✓ browser_snapshot defaults are compact/viewport/redacted");
+
+// 0.5.0: session_start no longer steals focus by default; request_attention exists.
+const ss0 = tools.find(t => t.name === "browser_session_start");
+if (ss0.inputSchema.properties.bringToFront.default !== false) {
+  console.error("session_start bringToFront default should be false in 0.5.0"); process.exit(1);
+}
+const ra = tools.find(t => t.name === "browser_request_attention");
+if (!ra || !ra.inputSchema.properties.reason || !ra.inputSchema.required?.includes("reason")) {
+  console.error("browser_request_attention schema bad:", ra); process.exit(1);
+}
+console.log("✓ session_start defaults to no-focus + browser_request_attention present");
 
 initToolsState({ log: () => {} });
 const fakeBridge = { mode: "broker", isConnected: () => false, getLocalClientId: () => "mc-self-abc",
