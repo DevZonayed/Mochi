@@ -13,6 +13,7 @@ import { WhatsAppProvider } from "./whatsapp.js";
 import { getSlice, listChats } from "../../../plugins/continuum/lib/comms_store.js";
 import { readConfig, writeConfig } from "../../../plugins/continuum/lib/comms_config.js";
 import { normalizeJid } from "../../../plugins/continuum/lib/comms_allowlist.js";
+import { commsRecall } from "../../../plugins/continuum/lib/comms_recall.js";
 
 const log = (...a) => process.stderr.write(a.map(String).join(" ") + "\n");
 
@@ -119,9 +120,14 @@ export function buildServer({ registry, env = process.env } = {}) {
           await p.connect?.(args.accountId, {});
           return ok({ status: p.status(args.accountId) });
         }
-        case "comms_recall":
+        case "comms_recall": {
+          return ok(commsRecall(projectDir, {
+            query: args.query, provider: args.provider, accountId: args.accountId,
+            chatId: args.chatId, since: args.since, until: args.until, limit: args.limit,
+          }));
+        }
         case "comms_import_history":
-          // Wired to comms recall/importer libs in their own phase tasks.
+          // Wired to the comms importer lib in its own phase task.
           return err(`${name} not wired in this phase`);
         default:
           // Should not reach here since unknown tools are caught above.
