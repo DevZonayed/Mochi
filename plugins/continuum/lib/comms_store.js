@@ -27,7 +27,12 @@ function atomicWrite(file, contents) {
 export function readCursor(projectDir, provider, accountId, chatId) {
   const f = commsCursorPath(projectDir, provider, accountId, chatId);
   if (!fs.existsSync(f)) return { ...CURSOR_DEFAULT };
-  try { return { ...CURSOR_DEFAULT, ...JSON.parse(fs.readFileSync(f, "utf8")) }; }
+  try {
+    const v = JSON.parse(fs.readFileSync(f, "utf8"));
+    return (v && typeof v === "object" && !Array.isArray(v))
+      ? { ...CURSOR_DEFAULT, ...v }
+      : { ...CURSOR_DEFAULT };
+  }
   catch { return { ...CURSOR_DEFAULT }; }
 }
 
