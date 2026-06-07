@@ -3235,8 +3235,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path4) {
-      let input = path4;
+    function removeDotSegments(path5) {
+      let input = path5;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3488,8 +3488,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path4, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path4 && path4 !== "/" ? path4 : void 0;
+        const [path5, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path5 && path5 !== "/" ? path5 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -112814,10 +112814,10 @@ var require_reach = __commonJS({
       }
       const isChainArray = Array.isArray(chain);
       Assert(!isChainArray || !options.separator, "Separator option is not valid for array-based chain");
-      const path4 = isChainArray ? chain : chain.split(options.separator || ".");
+      const path5 = isChainArray ? chain : chain.split(options.separator || ".");
       let ref = obj;
-      for (let i = 0; i < path4.length; ++i) {
-        let key = path4[i];
+      for (let i = 0; i < path5.length; ++i) {
+        let key = path5[i];
         const type = options.iterables && internals.iterables(ref);
         if (Array.isArray(ref) || type === "set") {
           const number3 = Number(key);
@@ -112827,7 +112827,7 @@ var require_reach = __commonJS({
         }
         if (!ref || typeof ref === "function" && options.functions === false || // Defaults to true
         !type && ref[key] === void 0) {
-          Assert(!options.strict || i + 1 === path4.length, "Missing segment", key, "in reach path ", chain);
+          Assert(!options.strict || i + 1 === path5.length, "Missing segment", key, "in reach path ", chain);
           Assert(typeof ref === "object" || options.functions === true || typeof ref !== "function", "Invalid segment", key, "in reach path ", chain);
           ref = options.default;
           break;
@@ -113144,8 +113144,8 @@ var require_applyToDefaults = __commonJS({
       const nullOverride = options.nullOverride !== void 0 ? options.nullOverride : false;
       return Merge(copy, source, { nullOverride, mergeArrays: false });
     };
-    internals.reachCopy = function(dst, src, path4) {
-      for (const segment of path4) {
+    internals.reachCopy = function(dst, src, path5) {
+      for (const segment of path5) {
         if (!(segment in src)) {
           return;
         }
@@ -113157,14 +113157,14 @@ var require_applyToDefaults = __commonJS({
       }
       const value = src;
       let ref = dst;
-      for (let i = 0; i < path4.length - 1; ++i) {
-        const segment = path4[i];
+      for (let i = 0; i < path5.length - 1; ++i) {
+        const segment = path5[i];
         if (typeof ref[segment] !== "object") {
           ref[segment] = {};
         }
         ref = ref[segment];
       }
-      ref[path4[path4.length - 1]] = value;
+      ref[path5[path5.length - 1]] = value;
     };
   }
 });
@@ -123998,11 +123998,11 @@ var require_mime_types = __commonJS({
       }
       return exts[0];
     }
-    function lookup(path4) {
-      if (!path4 || typeof path4 !== "string") {
+    function lookup(path5) {
+      if (!path5 || typeof path5 !== "string") {
         return false;
       }
-      var extension3 = extname("x." + path4).toLowerCase().substr(1);
+      var extension3 = extname("x." + path5).toLowerCase().substr(1);
       if (!extension3) {
         return false;
       }
@@ -125107,7 +125107,7 @@ var require_form_data = __commonJS({
     "use strict";
     var CombinedStream = require_combined_stream();
     var util4 = __require("util");
-    var path4 = __require("path");
+    var path5 = __require("path");
     var http3 = __require("http");
     var https2 = __require("https");
     var parseUrl2 = __require("url").parse;
@@ -125235,11 +125235,11 @@ var require_form_data = __commonJS({
     FormData3.prototype._getContentDisposition = function(value, options) {
       var filename;
       if (typeof options.filepath === "string") {
-        filename = path4.normalize(options.filepath).replace(/\\/g, "/");
+        filename = path5.normalize(options.filepath).replace(/\\/g, "/");
       } else if (options.filename || value && (value.name || value.path)) {
-        filename = path4.basename(options.filename || value && (value.name || value.path));
+        filename = path5.basename(options.filename || value && (value.name || value.path));
       } else if (value && value.readable && hasOwn(value, "httpVersion")) {
-        filename = path4.basename(value.client._httpMessage.path || "");
+        filename = path5.basename(value.client._httpMessage.path || "");
       }
       if (filename) {
         return 'filename="' + filename + '"';
@@ -125436,9 +125436,9 @@ function isVisitable(thing) {
 function removeBrackets(key) {
   return utils_default.endsWith(key, "[]") ? key.slice(0, -2) : key;
 }
-function renderKey(path4, key, dots) {
-  if (!path4) return key;
-  return path4.concat(key).map(function each(token, i) {
+function renderKey(path5, key, dots) {
+  if (!path5) return key;
+  return path5.concat(key).map(function each(token, i) {
     token = removeBrackets(token);
     return !dots && i ? "[" + token + "]" : token;
   }).join(dots ? "." : "");
@@ -125489,13 +125489,13 @@ function toFormData(obj, formData, options) {
     }
     return value;
   }
-  function defaultVisitor(value, key, path4) {
+  function defaultVisitor(value, key, path5) {
     let arr = value;
     if (utils_default.isReactNative(formData) && utils_default.isReactNativeBlob(value)) {
-      formData.append(renderKey(path4, key, dots), convertValue(value));
+      formData.append(renderKey(path5, key, dots), convertValue(value));
       return false;
     }
-    if (value && !path4 && typeof value === "object") {
+    if (value && !path5 && typeof value === "object") {
       if (utils_default.endsWith(key, "{}")) {
         key = metaTokens ? key : key.slice(0, -2);
         value = JSON.stringify(value);
@@ -125514,7 +125514,7 @@ function toFormData(obj, formData, options) {
     if (isVisitable(value)) {
       return true;
     }
-    formData.append(renderKey(path4, key, dots), convertValue(value));
+    formData.append(renderKey(path5, key, dots), convertValue(value));
     return false;
   }
   const stack = [];
@@ -125523,7 +125523,7 @@ function toFormData(obj, formData, options) {
     convertValue,
     isVisitable
   });
-  function build(value, path4, depth = 0) {
+  function build(value, path5, depth = 0) {
     if (utils_default.isUndefined(value)) return;
     if (depth > maxDepth) {
       throw new AxiosError_default(
@@ -125532,13 +125532,13 @@ function toFormData(obj, formData, options) {
       );
     }
     if (stack.indexOf(value) !== -1) {
-      throw new Error("Circular reference detected in " + path4.join("."));
+      throw new Error("Circular reference detected in " + path5.join("."));
     }
     stack.push(value);
     utils_default.forEach(value, function each(el, key) {
-      const result = !(utils_default.isUndefined(el) || el === null) && visitor.call(formData, el, utils_default.isString(key) ? key.trim() : key, path4, exposedHelpers);
+      const result = !(utils_default.isUndefined(el) || el === null) && visitor.call(formData, el, utils_default.isString(key) ? key.trim() : key, path5, exposedHelpers);
       if (result === true) {
-        build(el, path4 ? path4.concat(key) : [key], depth + 1);
+        build(el, path5 ? path5.concat(key) : [key], depth + 1);
       }
     });
     stack.pop();
@@ -125812,7 +125812,7 @@ var init_platform = __esm({
 // node_modules/axios/lib/helpers/toURLEncodedForm.js
 function toURLEncodedForm(data, options) {
   return toFormData_default(data, new platform_default.classes.URLSearchParams(), {
-    visitor: function(value, key, path4, helpers) {
+    visitor: function(value, key, path5, helpers) {
       if (platform_default.isNode && utils_default.isBuffer(value)) {
         this.append(key, value.toString("base64"));
         return false;
@@ -125850,11 +125850,11 @@ function arrayToObject(arr) {
   return obj;
 }
 function formDataToJSON(formData) {
-  function buildPath(path4, value, target, index) {
-    let name = path4[index++];
+  function buildPath(path5, value, target, index) {
+    let name = path5[index++];
     if (name === "__proto__") return true;
     const isNumericKey = Number.isFinite(+name);
-    const isLast = index >= path4.length;
+    const isLast = index >= path5.length;
     name = !name && utils_default.isArray(target) ? target.length : name;
     if (isLast) {
       if (utils_default.hasOwnProp(target, name)) {
@@ -125867,7 +125867,7 @@ function formDataToJSON(formData) {
     if (!utils_default.hasOwnProp(target, name) || !utils_default.isObject(target[name])) {
       target[name] = [];
     }
-    const result = buildPath(path4, value, target[name], index);
+    const result = buildPath(path5, value, target[name], index);
     if (result && utils_default.isArray(target[name])) {
       target[name] = arrayToObject(target[name]);
     }
@@ -129148,9 +129148,9 @@ var init_http = __esm({
           auth = urlUsername + ":" + urlPassword;
         }
         auth && headers.delete("authorization");
-        let path4;
+        let path5;
         try {
-          path4 = buildURL(
+          path5 = buildURL(
             parsed.pathname + parsed.search,
             config2.params,
             config2.paramsSerializer
@@ -129168,7 +129168,7 @@ var init_http = __esm({
           false
         );
         const options = Object.assign(/* @__PURE__ */ Object.create(null), {
-          path: path4,
+          path: path5,
           method,
           headers: toByteStringHeaderObject(headers),
           agents: { http: config2.httpAgent, https: config2.httpsAgent },
@@ -129545,14 +129545,14 @@ var init_cookies = __esm({
     cookies_default = platform_default.hasStandardBrowserEnv ? (
       // Standard browser envs support document.cookie
       {
-        write(name, value, expires, path4, domain, secure, sameSite) {
+        write(name, value, expires, path5, domain, secure, sameSite) {
           if (typeof document === "undefined") return;
           const cookie = [`${name}=${encodeURIComponent(value)}`];
           if (utils_default.isNumber(expires)) {
             cookie.push(`expires=${new Date(expires).toUTCString()}`);
           }
-          if (utils_default.isString(path4)) {
-            cookie.push(`path=${path4}`);
+          if (utils_default.isString(path5)) {
+            cookie.push(`path=${path5}`);
           }
           if (utils_default.isString(domain)) {
             cookie.push(`domain=${domain}`);
@@ -144512,11 +144512,11 @@ function linkParents(element) {
   return element;
 }
 function getElementPath(element) {
-  let path4 = "";
+  let path5 = "";
   if (element.parent && element.parent.name !== "dtd") {
-    path4 += `${getElementPath(element.parent)}/`;
+    path5 += `${getElementPath(element.parent)}/`;
   }
-  return path4 + element.name;
+  return path5 + element.name;
 }
 var import_debug14, debug14, EbmlContentError, ParseAction, EbmlIterator;
 var init_EbmlIterator = __esm({
@@ -147896,8 +147896,8 @@ var init_messages_media = __esm({
         throw error2;
       }
     };
-    extractVideoThumb = async (path4, destPath, time3, size) => new Promise((resolve, reject) => {
-      const cmd = `ffmpeg -ss ${time3} -i ${path4} -y -vf scale=${size.width}:-1 -vframes 1 -f image2 ${destPath}`;
+    extractVideoThumb = async (path5, destPath, time3, size) => new Promise((resolve, reject) => {
+      const cmd = `ffmpeg -ss ${time3} -i ${path5} -y -vf scale=${size.width}:-1 -vframes 1 -f image2 ${destPath}`;
       exec(cmd, (err2) => {
         if (err2) {
           reject(err2);
@@ -153808,11 +153808,11 @@ var init_use_multi_file_auth_state = __esm({
     init_auth_utils();
     init_generics();
     fileLocks = /* @__PURE__ */ new Map();
-    getFileLock = (path4) => {
-      let mutex = fileLocks.get(path4);
+    getFileLock = (path5) => {
+      let mutex = fileLocks.get(path5);
       if (!mutex) {
         mutex = new Mutex();
-        fileLocks.set(path4, mutex);
+        fileLocks.set(path5, mutex);
       }
       return mutex;
     };
@@ -155834,8 +155834,8 @@ var require_req = __commonJS({
       if (req.originalUrl) {
         _req.url = req.originalUrl;
       } else {
-        const path4 = req.path;
-        _req.url = typeof path4 === "string" ? path4 : req.url ? req.url.path || req.url : void 0;
+        const path5 = req.path;
+        _req.url = typeof path5 === "string" ? path5 : req.url ? req.url.path || req.url : void 0;
       }
       if (req.query) {
         _req.query = req.query;
@@ -156000,14 +156000,14 @@ var require_redact = __commonJS({
       }
       return obj;
     }
-    function parsePath(path4) {
+    function parsePath(path5) {
       const parts = [];
       let current = "";
       let inBrackets = false;
       let inQuotes = false;
       let quoteChar = "";
-      for (let i = 0; i < path4.length; i++) {
-        const char = path4[i];
+      for (let i = 0; i < path5.length; i++) {
+        const char = path5[i];
         if (!inBrackets && char === ".") {
           if (current) {
             parts.push(current);
@@ -156138,10 +156138,10 @@ var require_redact = __commonJS({
       return current;
     }
     function redactPaths(obj, paths, censor, remove = false) {
-      for (const path4 of paths) {
-        const parts = parsePath(path4);
+      for (const path5 of paths) {
+        const parts = parsePath(path5);
         if (parts.includes("*")) {
-          redactWildcardPath(obj, parts, censor, path4, remove);
+          redactWildcardPath(obj, parts, censor, path5, remove);
         } else {
           if (remove) {
             removeKey(obj, parts);
@@ -156226,8 +156226,8 @@ var require_redact = __commonJS({
           }
         } else {
           if (afterWildcard.includes("*")) {
-            const wrappedCensor = typeof censor === "function" ? (value, path4) => {
-              const fullPath = [...pathArray.slice(0, pathLength), ...path4];
+            const wrappedCensor = typeof censor === "function" ? (value, path5) => {
+              const fullPath = [...pathArray.slice(0, pathLength), ...path5];
               return censor(value, fullPath);
             } : censor;
             redactWildcardPath(current, afterWildcard, wrappedCensor, originalPath, remove);
@@ -156262,8 +156262,8 @@ var require_redact = __commonJS({
         return null;
       }
       const pathStructure = /* @__PURE__ */ new Map();
-      for (const path4 of pathsToClone) {
-        const parts = parsePath(path4);
+      for (const path5 of pathsToClone) {
+        const parts = parsePath(path5);
         let current = pathStructure;
         for (let i = 0; i < parts.length; i++) {
           const part = parts[i];
@@ -156315,24 +156315,24 @@ var require_redact = __commonJS({
       }
       return cloneSelectively(obj, pathStructure);
     }
-    function validatePath(path4) {
-      if (typeof path4 !== "string") {
+    function validatePath(path5) {
+      if (typeof path5 !== "string") {
         throw new Error("Paths must be (non-empty) strings");
       }
-      if (path4 === "") {
+      if (path5 === "") {
         throw new Error("Invalid redaction path ()");
       }
-      if (path4.includes("..")) {
-        throw new Error(`Invalid redaction path (${path4})`);
+      if (path5.includes("..")) {
+        throw new Error(`Invalid redaction path (${path5})`);
       }
-      if (path4.includes(",")) {
-        throw new Error(`Invalid redaction path (${path4})`);
+      if (path5.includes(",")) {
+        throw new Error(`Invalid redaction path (${path5})`);
       }
       let bracketCount = 0;
       let inQuotes = false;
       let quoteChar = "";
-      for (let i = 0; i < path4.length; i++) {
-        const char = path4[i];
+      for (let i = 0; i < path5.length; i++) {
+        const char = path5[i];
         if ((char === '"' || char === "'") && bracketCount > 0) {
           if (!inQuotes) {
             inQuotes = true;
@@ -156346,20 +156346,20 @@ var require_redact = __commonJS({
         } else if (char === "]" && !inQuotes) {
           bracketCount--;
           if (bracketCount < 0) {
-            throw new Error(`Invalid redaction path (${path4})`);
+            throw new Error(`Invalid redaction path (${path5})`);
           }
         }
       }
       if (bracketCount !== 0) {
-        throw new Error(`Invalid redaction path (${path4})`);
+        throw new Error(`Invalid redaction path (${path5})`);
       }
     }
     function validatePaths(paths) {
       if (!Array.isArray(paths)) {
         throw new TypeError("paths must be an array");
       }
-      for (const path4 of paths) {
-        validatePath(path4);
+      for (const path5 of paths) {
+        validatePath(path5);
       }
     }
     function slowRedact(options = {}) {
@@ -156527,8 +156527,8 @@ var require_redaction = __commonJS({
         if (shape[k] === null) {
           o2[k] = (value) => topCensor(value, [k]);
         } else {
-          const wrappedCensor = typeof censor === "function" ? (value, path4) => {
-            return censor(value, [k, ...path4]);
+          const wrappedCensor = typeof censor === "function" ? (value, path5) => {
+            return censor(value, [k, ...path5]);
           } : censor;
           o2[k] = Redact({
             paths: shape[k],
@@ -156749,7 +156749,7 @@ var require_sonic_boom = __commonJS({
     var fs8 = __require("fs");
     var EventEmitter5 = __require("events");
     var inherits2 = __require("util").inherits;
-    var path4 = __require("path");
+    var path5 = __require("path");
     var sleep = require_atomic_sleep();
     var assert2 = __require("assert");
     var BUSY_WRITE_TIMEOUT = 100;
@@ -156803,7 +156803,7 @@ var require_sonic_boom = __commonJS({
       const mode = sonic.mode;
       if (sonic.sync) {
         try {
-          if (sonic.mkdir) fs8.mkdirSync(path4.dirname(file), { recursive: true });
+          if (sonic.mkdir) fs8.mkdirSync(path5.dirname(file), { recursive: true });
           const fd = fs8.openSync(file, flags, mode);
           fileOpened(null, fd);
         } catch (err2) {
@@ -156811,7 +156811,7 @@ var require_sonic_boom = __commonJS({
           throw err2;
         }
       } else if (sonic.mkdir) {
-        fs8.mkdir(path4.dirname(file), { recursive: true }, (err2) => {
+        fs8.mkdir(path5.dirname(file), { recursive: true }, (err2) => {
           if (err2) return fileOpened(err2);
           fs8.open(file, flags, mode, fileOpened);
         });
@@ -186805,10 +186805,10 @@ var require_segments = __commonJS({
       const segs = getSegmentsFromString(data, Utils.isKanjiModeEnabled());
       const nodes = buildNodes(segs);
       const graph = buildGraph(nodes, version3);
-      const path4 = dijkstra.find_path(graph.map, "start", "end");
+      const path5 = dijkstra.find_path(graph.map, "start", "end");
       const optimizedSegs = [];
-      for (let i = 1; i < path4.length - 1; i++) {
-        optimizedSegs.push(graph.table[path4[i]].node);
+      for (let i = 1; i < path5.length - 1; i++) {
+        optimizedSegs.push(graph.table[path5[i]].node);
       }
       return exports.fromArray(mergeSegments(optimizedSegs));
     };
@@ -189285,7 +189285,7 @@ var require_png2 = __commonJS({
       });
       png.pack();
     };
-    exports.renderToFile = function renderToFile(path4, qrData, options, cb) {
+    exports.renderToFile = function renderToFile(path5, qrData, options, cb) {
       if (typeof cb === "undefined") {
         cb = options;
         options = void 0;
@@ -189296,7 +189296,7 @@ var require_png2 = __commonJS({
         called = true;
         cb.apply(null, args);
       };
-      const stream4 = fs8.createWriteStream(path4);
+      const stream4 = fs8.createWriteStream(path5);
       stream4.on("error", done);
       stream4.on("close", done);
       exports.renderToFileStream(stream4, qrData, options);
@@ -189358,14 +189358,14 @@ var require_utf82 = __commonJS({
       }
       return output;
     };
-    exports.renderToFile = function renderToFile(path4, qrData, options, cb) {
+    exports.renderToFile = function renderToFile(path5, qrData, options, cb) {
       if (typeof cb === "undefined") {
         cb = options;
         options = void 0;
       }
       const fs8 = __require("fs");
       const utf8 = exports.render(qrData, options);
-      fs8.writeFile(path4, utf8, cb);
+      fs8.writeFile(path5, utf8, cb);
     };
   }
 });
@@ -189486,7 +189486,7 @@ var require_svg_tag = __commonJS({
       return str;
     }
     function qrToPath(data, size, margin) {
-      let path4 = "";
+      let path5 = "";
       let moveBy = 0;
       let newRow = false;
       let lineLength = 0;
@@ -189497,19 +189497,19 @@ var require_svg_tag = __commonJS({
         if (data[i]) {
           lineLength++;
           if (!(i > 0 && col > 0 && data[i - 1])) {
-            path4 += newRow ? svgCmd("M", col + margin, 0.5 + row + margin) : svgCmd("m", moveBy, 0);
+            path5 += newRow ? svgCmd("M", col + margin, 0.5 + row + margin) : svgCmd("m", moveBy, 0);
             moveBy = 0;
             newRow = false;
           }
           if (!(col + 1 < size && data[i + 1])) {
-            path4 += svgCmd("h", lineLength);
+            path5 += svgCmd("h", lineLength);
             lineLength = 0;
           }
         } else {
           moveBy++;
         }
       }
-      return path4;
+      return path5;
     }
     exports.render = function render(qrData, options, cb) {
       const opts = Utils.getOptions(options);
@@ -189517,10 +189517,10 @@ var require_svg_tag = __commonJS({
       const data = qrData.modules.data;
       const qrcodesize = size + opts.margin * 2;
       const bg = !opts.color.light.a ? "" : "<path " + getColorAttrib(opts.color.light, "fill") + ' d="M0 0h' + qrcodesize + "v" + qrcodesize + 'H0z"/>';
-      const path4 = "<path " + getColorAttrib(opts.color.dark, "stroke") + ' d="' + qrToPath(data, size, opts.margin) + '"/>';
+      const path5 = "<path " + getColorAttrib(opts.color.dark, "stroke") + ' d="' + qrToPath(data, size, opts.margin) + '"/>';
       const viewBox = 'viewBox="0 0 ' + qrcodesize + " " + qrcodesize + '"';
       const width = !opts.width ? "" : 'width="' + opts.width + '" height="' + opts.width + '" ';
-      const svgTag = '<svg xmlns="http://www.w3.org/2000/svg" ' + width + viewBox + ' shape-rendering="crispEdges">' + bg + path4 + "</svg>\n";
+      const svgTag = '<svg xmlns="http://www.w3.org/2000/svg" ' + width + viewBox + ' shape-rendering="crispEdges">' + bg + path5 + "</svg>\n";
       if (typeof cb === "function") {
         cb(null, svgTag);
       }
@@ -189534,7 +189534,7 @@ var require_svg = __commonJS({
   "node_modules/qrcode/lib/renderer/svg.js"(exports) {
     var svgTagRenderer = require_svg_tag();
     exports.render = svgTagRenderer.render;
-    exports.renderToFile = function renderToFile(path4, qrData, options, cb) {
+    exports.renderToFile = function renderToFile(path5, qrData, options, cb) {
       if (typeof cb === "undefined") {
         cb = options;
         options = void 0;
@@ -189542,7 +189542,7 @@ var require_svg = __commonJS({
       const fs8 = __require("fs");
       const svgTag = exports.render(qrData, options);
       const xmlStr = '<?xml version="1.0" encoding="utf-8"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">' + svgTag;
-      fs8.writeFile(path4, xmlStr, cb);
+      fs8.writeFile(path5, xmlStr, cb);
     };
   }
 });
@@ -189700,8 +189700,8 @@ var require_server = __commonJS({
         cb
       };
     }
-    function getTypeFromFilename(path4) {
-      return path4.slice((path4.lastIndexOf(".") - 1 >>> 0) + 2).toLowerCase();
+    function getTypeFromFilename(path5) {
+      return path5.slice((path5.lastIndexOf(".") - 1 >>> 0) + 2).toLowerCase();
     }
     function getRendererFromType(type) {
       switch (type) {
@@ -189765,17 +189765,17 @@ var require_server = __commonJS({
       const renderer = getRendererFromType(params.opts.type);
       return render(renderer.renderToBuffer, text, params);
     };
-    exports.toFile = function toFile(path4, text, opts, cb) {
-      if (typeof path4 !== "string" || !(typeof text === "string" || typeof text === "object")) {
+    exports.toFile = function toFile(path5, text, opts, cb) {
+      if (typeof path5 !== "string" || !(typeof text === "string" || typeof text === "object")) {
         throw new Error("Invalid argument");
       }
       if (arguments.length < 3 && !canPromise()) {
         throw new Error("Too few arguments provided");
       }
       const params = checkParams(text, opts, cb);
-      const type = params.opts.type || getTypeFromFilename(path4);
+      const type = params.opts.type || getTypeFromFilename(path5);
       const renderer = getRendererFromType(type);
-      const renderToFile = renderer.renderToFile.bind(null, path4);
+      const renderToFile = renderer.renderToFile.bind(null, path5);
       return render(renderToFile, text, params);
     };
     exports.toFileStream = function toFileStream(stream4, text, opts) {
@@ -190037,10 +190037,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path4) {
-  if (!path4)
+function getElementAtPath(obj, path5) {
+  if (!path5)
     return obj;
-  return path4.reduce((acc, key) => acc?.[key], obj);
+  return path5.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -190449,11 +190449,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path4, issues) {
+function prefixIssues(path5, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path4);
+    iss.path.unshift(path5);
     return iss;
   });
 }
@@ -190600,16 +190600,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path4 = []) => {
+  const processError = (error3, path5 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path4, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path5, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path4, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
       } else {
-        const fullpath = [...path4, ...issue2.path];
+        const fullpath = [...path5, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -198424,6 +198424,7 @@ var ProviderRegistry = class {
 
 // src/comms/whatsapp.js
 import fs6 from "node:fs/promises";
+import path4 from "node:path";
 
 // src/comms/normalize.js
 function unwrap(message) {
@@ -198895,6 +198896,26 @@ function consoleLogger({ level = "warn", write: write2 } = {}) {
   };
   return logger;
 }
+function lockPath(authDir) {
+  return path4.join(authDir, ".lock");
+}
+async function readLock(authDir) {
+  try {
+    const raw = await fs6.readFile(lockPath(authDir), "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+async function releaseLock(authDir) {
+  const lk = await readLock(authDir);
+  if (lk && lk.pid === process.pid) {
+    try {
+      await fs6.rm(lockPath(authDir), { force: true });
+    } catch {
+    }
+  }
+}
 var _jidNormalizedUser = (jid) => jid;
 async function ensureJidNormalizer() {
   if (_jidNormalizedUser !== void 0 && _jidNormalizedUser.__loaded) return;
@@ -199060,6 +199081,68 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
   async _wipeAuth(accountId) {
     const dir = this.getSessionDir(accountId);
     await fs6.rm(dir, { recursive: true, force: true });
+  }
+  // ---- CommsProvider read/admin surface (comms-setup step 4, comms-recall) ----
+  // listGroups: enumerate the groups this account participates in, live from the
+  // socket. Requires a connected socket — there is no offline group roster.
+  // Returns [{ id, name, chatKind:"group" }] (name = group subject).
+  async listGroups(accountId) {
+    const sock = this.sockets.get(accountId);
+    if (!sock || this.statuses.get(accountId) !== "connected") {
+      throw new Error(`account not connected: ${accountId}`);
+    }
+    const g = await sock.groupFetchAllParticipating() || {};
+    return Object.values(g).map((meta2) => ({
+      id: meta2.id,
+      name: meta2.subject ?? null,
+      chatKind: "group"
+    }));
+  }
+  // listChats: chats already known from the LOCAL store for this account (no
+  // network). Filtered to the account's allowlist by the store helper. Returns
+  // store entries already scoped to provider:"whatsapp"/this accountId.
+  async listChats(accountId) {
+    const projectDir = this.projectDirFor(accountId);
+    const cfg = readConfig(projectDir);
+    const acct = cfg?.providers?.whatsapp?.accounts?.[accountId];
+    const allowed = Array.isArray(acct?.allowed_jids) ? acct.allowed_jids : [];
+    return listChats(projectDir, allowed).filter((c) => c.provider === "whatsapp" && c.accountId === accountId);
+  }
+  // getMessages: best-effort read of normalized Msgs from the local store
+  // (display/backfill). HARD caps + ordering are enforced by getSlice.
+  async getMessages(accountId, chatId, opts = {}) {
+    const projectDir = this.projectDirFor(accountId);
+    const normChatId = normalizeJid(chatId);
+    const { messages } = getSlice(projectDir, {
+      provider: "whatsapp",
+      accountId,
+      chatId: normChatId,
+      limit: opts.limit,
+      before: opts.before,
+      after: opts.after
+    });
+    return messages;
+  }
+  // unlink: tear down everything for this account — close the live socket,
+  // release the single-writer lock, wipe the auth dir, and forget in-memory
+  // state so a subsequent link() starts clean.
+  async unlink(accountId) {
+    const sock = this.sockets.get(accountId);
+    if (sock) {
+      try {
+        sock.end?.();
+      } catch {
+      }
+    }
+    const authDir = this.getSessionDir(accountId);
+    try {
+      await releaseLock(authDir);
+    } catch {
+    }
+    await this._wipeAuth(accountId);
+    this.sockets.delete(accountId);
+    this.statuses.delete(accountId);
+    this._reconnects.delete(accountId);
   }
   // link: open a socket (if needed) and resolve to QR or pairing code.
   // opts: { phone? }. deps: { makeSocket?, qrToDataUrl? } (injectable for tests).
