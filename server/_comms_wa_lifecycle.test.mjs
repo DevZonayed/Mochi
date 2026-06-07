@@ -291,6 +291,9 @@ function mockGroupSocket(groups) {
 {
   const dir = await setup();
   const CHAT = "19998887777@s.whatsapp.net";
+  // Allowlist the chat (read-side §6.4): getMessages only returns allowlisted chats.
+  await writeConfig(dir, { version: 1, decided: true, declined: false,
+    providers: { whatsapp: { accounts: { [ACCOUNT]: { capture: "session", mode: "strict", allowed_jids: [CHAT] } } } } });
   for (const m of [
     { msgId: "a", ts: 100, text: "one" },
     { msgId: "b", ts: 200, text: "two" },
@@ -307,6 +310,24 @@ function mockGroupSocket(groups) {
   // newest-first
   assert.equal(msgs[0].msgId, "c");
   assert.equal(msgs[1].msgId, "b");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 16b) getMessages(accountId, chatId): non-allowlisted chatId returns [] (read-side §6.4
+// allowlist enforcement — defense-in-depth, even if the store somehow holds the chat).
+{
+  const dir = await setup();
+  const ALLOWED = "19998887777@s.whatsapp.net";
+  const NOT_ALLOWED = "10001112222@s.whatsapp.net";
+  // Allowlist only ALLOWED; seed the store with messages for the NON-allowlisted chat.
+  await writeConfig(dir, { version: 1, decided: true, declined: false,
+    providers: { whatsapp: { accounts: { [ACCOUNT]: { capture: "session", mode: "strict", allowed_jids: [ALLOWED] } } } } });
+  appendMessage(dir, { provider: "whatsapp", accountId: ACCOUNT, chatId: NOT_ALLOWED,
+    msgId: "x", fromMe: false, senderId: NOT_ALLOWED, senderName: "Eve", ts: 100, tsIso: new Date(100000).toISOString(),
+    kind: "text", text: "secret", media: null, reply_to: null, source: "live" });
+  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  const msgs = await p.getMessages(ACCOUNT, NOT_ALLOWED, { limit: 10 });
+  assert.deepEqual(msgs, [], "getMessages must return [] for a non-allowlisted chatId");
   await fs.rm(dir, { recursive: true, force: true });
 }
 
@@ -333,6 +354,45 @@ function mockGroupSocket(groups) {
   // in-memory entry cleared
   assert.equal(p.sockets.has(ACCOUNT), false, "unlink must clear the in-memory socket entry");
   assert.equal(ended, 1, "unlink must close the live socket exactly once");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 18) unlink(accountId): a CODE-LESS close emitted by end() must NOT resurrect the account.
+// Regression: a real baileys end(undefined) emits connection.update
+// {connection:'close', lastDisconnect:{error: undefined}} — no statusCode. The
+// connection.update listener wired by _wireConnection is still attached; without
+// a stale-socket guard / pre-end teardown, that code-less close falls into the
+// bounded-reconnect branch, schedules a reconnect, and re-creates the socket +
+// auth dir for an account the user explicitly unlinked. Here end() emits exactly
+// that close; we assert no new socket is created and the account stays untracked.
+{
+  const dir = await setup();
+  let made = 0;
+  let sock;
+  const makeSocket = () => {
+    made++;
+    const s = mockSocket();
+    // end() synchronously emits the code-less close a real baileys socket emits.
+    s.end = () => { s._emit("connection.update", { connection: "close", lastDisconnect: { error: undefined } }); };
+    sock = s;
+    return s;
+  };
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
+  const authDir = commsAuthDir(dir, "whatsapp", ACCOUNT);
+  await acquireLock(authDir);
+  await fs.writeFile(path.join(authDir, "creds.json"), "{}");
+  await p.connect(ACCOUNT, { makeSocket });
+  assert.equal(made, 1, "connect creates exactly one socket");
+  await p.unlink(ACCOUNT);
+  // Give any (erroneously) scheduled reconnect time to fire.
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(made, 1, "code-less close after unlink must NOT re-create the socket");
+  assert.equal(p.sockets.has(ACCOUNT), false, "account must stay untracked after unlink");
+  assert.equal(p.status(ACCOUNT), "logged_out", "unlinked account status must not flip back to connected");
+  // auth dir stays wiped (not resurrected by a reconnect re-running useMultiFileAuthState).
+  let exists = true;
+  try { await fs.access(authDir); } catch { exists = false; }
+  assert.equal(exists, false, "code-less close after unlink must NOT resurrect the auth dir");
   await fs.rm(dir, { recursive: true, force: true });
 }
 

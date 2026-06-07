@@ -15,7 +15,7 @@ export class NotImplemented extends Error {
 // unlink(accountId)                      -> wipe session files
 // listChats(accountId)                   -> [{id,name,chatKind}]
 // listGroups(accountId)                  -> [{id,name,chatKind:'group'}]
-// getMessages(accountId, chatId, {limit,before,after}) -> Msg[] (best-effort backfill)
+// getMessages(accountId, chatId, {limit,continuation}) -> Msg[] (best-effort backfill; allowlist-filtered, paged via continuation)
 // onMessage(cb)                          -> live stream of normalized Msg
 // getSessionDir(accountId)               -> auth dir path
 export class CommsProvider {
