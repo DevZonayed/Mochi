@@ -1411,6 +1411,25 @@ echo "$GE_CTX" | grep -qi "new message" && fail "freshness note wrongly fired wh
 echo "$GE_CTX" | grep -q "hasn't decided about communication-channel sync" && fail "ASK appeared in decided+connected context" || ok "no spurious ASK when decided+connected+current"
 rm -rf "$GE"
 
+# ---- T59: comms slash commands exist, are MCP-driven, env-var-clean ----------
+echo
+echo "T59 — /mochi:comms-* command files present, well-formed, no unexpanded env vars"
+CMDDIR="$PLUGIN_DIR/commands"
+for c in comms-setup comms-sync comms-recall comms-import comms-status; do
+  [ -f "$CMDDIR/$c.md" ] && ok "$c.md exists" || fail "$c.md missing"
+done
+# Every comms command must declare the comms MCP tools in allowed-tools (not Bash helpers):
+for c in comms-setup comms-sync comms-recall comms-import comms-status; do
+  grep -q "mcp__plugin_mochi_comms__" "$CMDDIR/$c.md" && ok "$c references comms MCP tools" || fail "$c does not reference comms MCP tools"
+done
+# Must NOT use unexpanded plugin-path env vars (same rule T29 enforces repo-wide):
+BAD_COMMS=$(grep -lE '\$CLAUDE_PLUGIN_ROOT|CLAUDE_SKILL_DIR' "$CMDDIR"/comms-*.md 2>/dev/null | wc -l | tr -d ' ')
+[ "$BAD_COMMS" = "0" ] && ok "comms commands use no unexpanded env vars" || fail "$BAD_COMMS comms command(s) use env vars"
+# Each must have YAML frontmatter with a description line:
+for c in comms-setup comms-sync comms-recall comms-import comms-status; do
+  head -1 "$CMDDIR/$c.md" | grep -qx -- "---" && grep -q "^description:" "$CMDDIR/$c.md" && ok "$c has frontmatter+description" || fail "$c frontmatter malformed"
+done
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
