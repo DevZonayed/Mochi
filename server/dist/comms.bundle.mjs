@@ -199290,25 +199290,25 @@ function toEpochSeconds2(date3, time3, ampm, tzMinutes) {
   const tzAdj = Number.isFinite(tzMinutes) ? tzMinutes * 60 : 0;
   return Math.floor(Date.UTC(yr, mo - 1, da, hr, min, sec) / 1e3) + tzAdj;
 }
+var LEAD = "[\u200E\u200F]*\\s*";
 var MEDIA_MARKERS = [
-  { re: /<Media omitted>/i, kind: "image" },
+  { re: new RegExp(`^${LEAD}<Media omitted>\\s*$`, "i"), kind: "image" },
   // generic; exact kind is unknowable from text
-  { re: /\bimage omitted\b/i, kind: "image" },
-  { re: /\bvideo omitted\b/i, kind: "video" },
-  { re: /\baudio omitted\b/i, kind: "audio" },
-  { re: /\bsticker omitted\b/i, kind: "image" },
-  { re: /\bGIF omitted\b/i, kind: "video" },
-  { re: /\bdocument omitted\b/i, kind: "document" },
-  { re: /\bContact card omitted\b/i, kind: "system" },
-  { re: /[‎‏]*\S+\.\w+\s*\(file attached\)/i, kind: "document" }
+  { re: new RegExp(`^${LEAD}image omitted\\s*$`, "i"), kind: "image" },
+  { re: new RegExp(`^${LEAD}video omitted\\s*$`, "i"), kind: "video" },
+  { re: new RegExp(`^${LEAD}audio omitted\\s*$`, "i"), kind: "audio" },
+  { re: new RegExp(`^${LEAD}sticker omitted\\s*$`, "i"), kind: "image" },
+  { re: new RegExp(`^${LEAD}GIF omitted\\s*$`, "i"), kind: "video" },
+  { re: new RegExp(`^${LEAD}document omitted\\s*$`, "i"), kind: "document" },
+  { re: new RegExp(`^${LEAD}Contact card omitted\\s*$`, "i"), kind: "system" },
+  { re: new RegExp(`^${LEAD}\\S+\\.\\w+\\s*\\(file attached\\)\\s*$`, "i"), kind: "document" }
   // "IMG-001.jpg (file attached)"
 ];
 function classifyBody(body) {
   const trimmed = (body || "").trim();
   for (const { re, kind } of MEDIA_MARKERS) {
     if (re.test(trimmed)) {
-      const caption = trimmed.replace(re, "").trim();
-      return { kind, text: caption };
+      return { kind, text: "" };
     }
   }
   return { kind: "text", text: body };
