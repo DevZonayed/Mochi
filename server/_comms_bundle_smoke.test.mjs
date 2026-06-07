@@ -1,16 +1,20 @@
 // server/_comms_bundle_smoke.test.mjs
 // GATING (spec §12): comms.bundle.mjs builds, boots under bare node, lists tools over stdio;
+// the shipped artifact is native-free (no inlined sharp.node / @img/sharp loader);
 // baileys own package is pure-JS (no *.node, no native install scripts).
 //
 // NOTE on native-addon coverage: the bare-node boot test (steps b/c) is the primary runtime
 // guarantee — it runs the bundle from a genuinely bare tmp dir (no node_modules in any parent
 // of os.tmpdir()), so a successful initialize+tools/list proves the bundle needs no native
-// addon at boot time. The pure-JS scan below (step d) covers only baileys' own package files
-// (~362 files under @whiskeysockets/baileys); baileys' transitive deps (sharp, libsignal,
-// pino, protobufjs, ws, axios …) are flat-hoisted to the top-level server/node_modules and
-// are NOT walked here. esbuild inlines sharp's native-binding loader into the bundle, but that
-// path is never executed under bare node (sharp is not required at MCP tool-list time), which
-// is why the boot test remains the authoritative "no native addon at runtime" check.
+// addon at boot time. Step (d) additionally scans the actual shipped artifact
+// (dist/comms.bundle.mjs) and asserts it contains zero sharp.node / @img/sharp references and
+// no executed native `.node` require — sharp and jimp are marked esbuild externals in
+// build:comms, so their native-binding loaders are no longer inlined. Baileys' only references
+// to them survive as bare dynamic `import("sharp")` / `import("jimp")` strings wrapped in
+// `.catch(()=>{})`, which resolve to nothing at runtime (v1 is media-metadata-only and never
+// thumbnails). Step (e) scans baileys' own package files (~362 files under
+// @whiskeysockets/baileys) for prebuilt addons / native install scripts; baileys' transitive
+// deps are flat-hoisted to the top-level server/node_modules and are not walked there.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -115,11 +119,35 @@ async function listToolsOverStdio() {
   }
 }
 
-// ── (d) pure-JS assertion for baileys' own package (NOT its hoisted transitive deps) ──────
+// ── (d) the shipped artifact itself must be native-free ──────────────────────
+// sharp/jimp are esbuild externals, so the bundle must NOT inline sharp's native-binding
+// loader (no sharp.node / @img/sharp), and must contain no executed native `.node` require.
+// Bare dynamic `import("sharp")` / `import("jimp")` strings may remain — they resolve to
+// nothing at runtime and baileys catches the rejection.
+{
+  const src = fs.readFileSync(bundlePath, "utf8");
+
+  const sharpNodeRefs = (src.match(/sharp\.node|@img\/sharp/g) || []).length;
+  assert.equal(
+    sharpNodeRefs,
+    0,
+    `shipped bundle must not reference sharp.node / @img/sharp (sharp must be an esbuild external); found ${sharpNodeRefs}`
+  );
+
+  // No native addon load: any string literal ending in `.node` that is required/imported.
+  const nativeDotNodeRefs = (src.match(/['"][^'"]*\.node['"]/g) || []);
+  assert.equal(
+    nativeDotNodeRefs.length,
+    0,
+    `shipped bundle must contain no executed native .node require; found:\n${nativeDotNodeRefs.join("\n")}`
+  );
+}
+
+// ── (e) pure-JS assertion for baileys' own package (NOT its hoisted transitive deps) ──────
 // Scope: this scan covers only the files directly under @whiskeysockets/baileys (~362 files).
 // Baileys' transitive deps are flat-hoisted to server/node_modules and are not walked here.
 // The authoritative "no native addon needed at runtime" guarantee is the bare-node boot test
-// above (steps b/c) — see the file header for the full explanation.
+// above (steps b/c), reinforced by the shipped-artifact scan (step d) — see the file header.
 {
   const baileysDir = path.join(serverDir, "node_modules", "@whiskeysockets", "baileys");
   assert.ok(fs.existsSync(baileysDir), "baileys must be installed for the pure-JS scan");
@@ -163,4 +191,4 @@ async function listToolsOverStdio() {
   assert.equal(nativeInstallScriptPkgs.length, 0, `baileys own package must have no native-compilation install scripts; found:\n${nativeInstallScriptPkgs.join("\n")}`);
 }
 
-console.log("✓ comms bundle smoke: builds, boots under bare node, lists tools, baileys pure-JS (spec §12)");
+console.log("✓ comms bundle smoke: builds, boots under bare node, lists tools, shipped artifact native-free (no sharp.node), baileys pure-JS (spec §12)");

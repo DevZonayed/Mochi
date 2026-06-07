@@ -12,7 +12,7 @@ const EXISTING_BROWSER =
   'esbuild src/index.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/server.bundle.mjs --legal-comments=external --banner:js="import{createRequire as ___cr}from\'node:module\';const require=___cr(import.meta.url);"';
 
 const EXPECTED_COMMS =
-  'esbuild src/comms/index.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/comms.bundle.mjs --legal-comments=external --log-override:indirect-require=silent --banner:js="import{createRequire as ___cr}from\'node:module\';const require=___cr(import.meta.url);"';
+  'esbuild src/comms/index.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/comms.bundle.mjs --legal-comments=external --log-override:indirect-require=silent --external:sharp --external:jimp --external:@img/* --banner:js="import{createRequire as ___cr}from\'node:module\';const require=___cr(import.meta.url);"';
 
 // 1) build orchestrates both targets, in order
 assert.equal(pkg.scripts.build, "npm run build:browser && npm run build:comms", "build must run browser then comms");

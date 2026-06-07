@@ -38,24 +38,6 @@ mime-types/index.js:
    * MIT Licensed
    */
 
-sharp/lib/is.js:
-sharp/lib/libvips.js:
-sharp/lib/sharp.js:
-sharp/lib/constructor.js:
-sharp/lib/input.js:
-sharp/lib/resize.js:
-sharp/lib/composite.js:
-sharp/lib/operation.js:
-sharp/lib/colour.js:
-sharp/lib/channel.js:
-sharp/lib/output.js:
-sharp/lib/utility.js:
-sharp/lib/index.js:
-  /*!
-    Copyright 2013 Lovell Fuller and others.
-    SPDX-License-Identifier: Apache-2.0
-  */
-
 ieee754/index.js:
   /*! ieee754. BSD-3-Clause License. Feross Aboukhadijeh <https://feross.org/opensource> */
 
