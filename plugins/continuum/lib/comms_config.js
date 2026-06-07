@@ -12,7 +12,10 @@ const DEFAULTS = { version: 1, decided: false, declined: false, providers: {} };
 
 function readJsonOr(file, fallback) {
   if (!fs.existsSync(file)) return fallback;
-  try { return JSON.parse(fs.readFileSync(file, "utf8")); }
+  try {
+    const v = JSON.parse(fs.readFileSync(file, "utf8"));
+    return (v && typeof v === "object" && !Array.isArray(v)) ? v : fallback;
+  }
   catch { return fallback; }
 }
 

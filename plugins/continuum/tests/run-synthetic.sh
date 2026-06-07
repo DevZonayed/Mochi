@@ -572,6 +572,16 @@ import('$PLUGIN_DIR/lib/comms_config.js').then((m) => {
     const dec = m.declineConfig();
     eq(dec, {version:1, decided:true, declined:true}, 'decline-shape');
 
+    // (f) null JSON in config file degrades to defaults (never-throw contract)
+    // Remove local override so only the committed file (set to 'null') is read.
+    try { fs.unlinkSync(P.commsLocalConfigPath(d)); } catch {}
+    fs.writeFileSync(P.commsConfigPath(d), 'null');
+    let nullThrew = false;
+    let nullResult;
+    try { nullResult = m.readConfig(d); } catch(e) { nullThrew = true; }
+    eq(nullThrew, false, 'null-json-does-not-throw');
+    eq(nullResult.providers, {}, 'null-json-falls-back-to-defaults');
+
     console.log(bad === 0 ? 'CONFIG OK' : 'CONFIG BAD ' + bad);
   });
 });
