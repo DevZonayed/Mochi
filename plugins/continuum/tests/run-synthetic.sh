@@ -846,6 +846,32 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
     eq(c3Msgs[0].msgId, 'LIVE_ZZZ', 'reverse-lw-stored-record-is-live');
     eq(c3Msgs[0].source, 'live', 'reverse-lw-stored-record-source-is-live');
 
+    // EDGE CASE (b2): reverse live-wins with TWO pre-existing same-fp import records
+    // (intra-minute 'ok'/'ok' case — reconcileImport mints distinct ordinal msgIds
+    // but identical fingerprint). A single live re-delivery must supersede exactly
+    // ONE import (1:1 greedy match), leaving the second import intact. Verified by
+    // seeding import:a and import:b (same fp), then appending one live: the store
+    // must end with exactly TWO records (one live + one import), not one (silent
+    // loss) and not three (inflation). This is the §4.2 correctness-critical path.
+    const base5 = { ...base, chatId:'c5@g.us' };
+    const fp5 = D.fingerprint({ ...base5, ts:1717700400, text:'ok', source:'import' });
+    // Seed two distinct import records that share the same fingerprint
+    m.appendMessage(d, { ...base5, msgId:'import:aa', ts:1717700400, text:'ok', source:'import', fingerprint: fp5 });
+    m.appendMessage(d, { ...base5, msgId:'import:bb', ts:1717700410, text:'ok', source:'import', fingerprint: fp5 });
+    eq(m.readCursor(d,'whatsapp','work','c5@g.us').count, 2, 'two-fp-imports-seeded');
+    // Live arrives for the same logical fingerprint
+    const rLive5 = m.appendMessage(d, { ...base5, msgId:'LIVE5', ts:1717700405, text:'ok', source:'live', fingerprint: fp5 });
+    eq(rLive5.appended, true, 'two-import-fp-live-wins-appended');
+    const c5Msgs = m.readAllMessages(d,'whatsapp','work','c5@g.us');
+    // MUST be 2: one import superseded by live, one import left intact (no silent loss)
+    eq(c5Msgs.length, 2, 'two-fp-imports-live-wins-count-2-not-1');
+    const c5Live = c5Msgs.filter(r => r.source === 'live');
+    const c5Imp  = c5Msgs.filter(r => r.source === 'import');
+    eq(c5Live.length, 1, 'two-fp-imports-exactly-one-live-record');
+    eq(c5Imp.length,  1, 'two-fp-imports-exactly-one-import-record-kept');
+    eq(c5Live[0].msgId, 'LIVE5', 'two-fp-imports-live-record-is-LIVE5');
+    eq(m.readCursor(d,'whatsapp','work','c5@g.us').count, 2, 'two-fp-imports-cursor-count-2');
+
     // EDGE CASE (c): loop-ordering — store already has BOTH an import-dup AND a
     // real-dup (same fingerprint, same source) for the same fingerprint. An
     // incoming IMPORT must scan past the import match (would be a same-source

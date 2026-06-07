@@ -92,12 +92,18 @@ export function appendMessage(projectDir, msg) {
       if (existingIsImport && incomingIsReal) {
         // Reverse live-wins: import stored first, live/backfill arrives later
         // (re-delivery overlap). Per spec §4.2 live wins unconditionally.
-        // Supersede the import record: rewrite the messages file without it,
-        // then append the live record in its place. The logical count stays
-        // the same (1 import replaced by 1 live); the duplicate import is removed
-        // so getSlice and cursor.count both reflect exactly ONE logical message.
+        // Supersede exactly ONE import record (greedy 1:1 per §4.2): replace
+        // the first matched import with the live record. Any additional same-fp
+        // import records that coexist (e.g. intra-minute duplicates minted by
+        // reconcileImport with distinct ordinal msgIds) are left intact so no
+        // real message is silently lost. Using the index of `e` as found in
+        // this iteration avoids over-broad removal.
         const record = { ...msg, fingerprint: fp };
-        const withoutImport = existing.filter((r) => r.fingerprint !== fp || r.source === "live" || r.source === "backfill");
+        let superseded = false;
+        const withoutImport = existing.filter((r) => {
+          if (!superseded && r === e) { superseded = true; return false; }
+          return true;
+        });
         const allReplaced = withoutImport.concat([record]);
         const file = commsMessagesPath(projectDir, provider, accountId, chatId);
         fs.mkdirSync(path.dirname(file), { recursive: true });
