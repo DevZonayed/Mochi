@@ -24,6 +24,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { exec } from "node:child_process";
 
 const HELLO_TIMEOUT_MS = 3000;
 const REQUEST_TIMEOUT_MS = 30000;
@@ -256,7 +257,7 @@ export class Bridge {
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     if (req.method === "OPTIONS") { res.writeHead(204).end(); return; }
 
-    if (!url.pathname.startsWith("/claude/")) {
+    if (!url.pathname.startsWith("/claude/") && !url.pathname.startsWith("/os/")) {
       res.writeHead(404, { "Content-Type": "application/json" })
          .end(JSON.stringify({ error: "not found" }));
       return;
@@ -311,6 +312,24 @@ export class Bridge {
         if (!sessionId || !message) return this._respondJson(res, 400, { error: "sessionId and message required" });
         const ok = this._pushClaudeMessage(sessionId, message, context);
         return this._respondJson(res, ok ? 200 : 404, { ok });
+      }
+      if (p === "/os/open-notification-settings") {
+        // Best-effort deep-link to the macOS Notifications settings pane so a
+        // non-technical user can enable Chrome's notifications in one click.
+        if (process.platform !== "darwin") {
+          return this._respondJson(res, 200, { ok: false, reason: "not-macos" });
+        }
+        if (process.env.MOCHI_NO_OS_EXEC) {
+          return this._respondJson(res, 200, { ok: true, skipped: true });
+        }
+        // exec is async — its failures surface in the callback, not as a throw,
+        // so respond from there to report the real outcome.
+        exec('open "x-apple.systempreferences:com.apple.preference.notifications"', (err) => {
+          this._respondJson(res, 200, err
+            ? { ok: false, reason: String(err.message ?? err) }
+            : { ok: true });
+        });
+        return;
       }
       this._respondJson(res, 404, { error: "not found" });
     });
