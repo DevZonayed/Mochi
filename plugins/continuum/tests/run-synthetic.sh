@@ -923,14 +923,24 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
     eq(s.messages[0].msgId, 'M49', 'newest-first');
     eq(s.messages[19].msgId, 'M30', '20th-is-M30');
 
-    // HARD max clamp: ask for 9999 -> clamped to 200 (only 50 exist here)
-    const big = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', limit:9999 });
+    // HARD max clamp: ask for 9999 -> clamped to 200 (only 50 exist here).
+    // Pass a generous byteBudget so the byte-budget gate does not interfere with
+    // this limit-clamping assertion (50 msgs × ~332 bytes = ~16 600 B > default
+    // 16 KB budget, so the default budget would cut it to 49 when *4 is active).
+    const big = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', limit:9999, byteBudget:1024*1024 });
     eq(big.limitApplied, 200, 'hard-clamp-200');
     eq(big.messages.length, 50, 'returns-all-50-under-cap');
 
-    // byte budget: a tiny budget truncates and hands back a continuation cursor
+    // byte budget: a tiny budget truncates and hands back a continuation cursor.
+    // Each stored message JSON is ~330 bytes; sz = estimateTokens(...)*4 ≈ 332.
+    // Budget=300: first message always included (guard skips when out.length===0),
+    // second would push bytes to ~664 > 300, so exactly 1 message is returned.
+    // This assertion discriminates the byte-budget unit: without the *4 multiplier
+    // sz≈83 (token count) and 3 messages would fit under 300, so the test would
+    // return 3 — confirming the *4 is load-bearing for the byte-budget invariant.
     const tiny = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', limit:200, byteBudget:300 });
     eq(tiny.messages.length < 50, true, 'byte-budget-truncates');
+    eq(tiny.messages.length, 1, 'byte-budget-exact-1');
     eq(typeof tiny.continuation === 'string' && tiny.continuation.length > 0, true, 'continuation-emitted');
 
     // continuation paging: next page resumes strictly older than last returned

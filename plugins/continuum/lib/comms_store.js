@@ -189,7 +189,7 @@ export function getSlice(projectDir, opts) {
       continuation = `${out[out.length - 1].ts}:${out[out.length - 1].msgId}`;
       break;
     }
-    const sz = estimateTokens(JSON.stringify(m)); // estimated tokens
+    const sz = estimateTokens(JSON.stringify(m)) * 4; // estimateTokens ≈ chars/4; *4 → bytes
     if (out.length > 0 && bytes + sz > byteBudget) {
       continuation = `${out[out.length - 1].ts}:${out[out.length - 1].msgId}`;
       break;
