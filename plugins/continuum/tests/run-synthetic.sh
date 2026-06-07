@@ -1064,6 +1064,26 @@ import('$PLUGIN_DIR/lib/comms_import.js').then((m) => {
     eq(msgs[1].kind, 'image', 'media-omitted-kind');
     eq(msgs[1].text, '', 'media-omitted-no-caption');
 
+    // FALSE-POSITIVE GUARD (quality review Task 2): a conversational line that
+    // merely CONTAINS marker words mid-sentence must NOT be misclassified as
+    // media. The media markers are whole-body only; an unanchored regex would
+    // wrongly tag this as kind:'image', strip 'image omitted', and corrupt the
+    // text (changing the fingerprint and breaking dedupe). Assert kind stays
+    // 'text' and the text is preserved verbatim.
+    const fpFile = path.join(d, 'export-fp.txt');
+    fs.writeFileSync(fpFile, [
+      '[6/6/24, 6:20:00 PM] Al: the image omitted from the report was important',
+      '[6/6/24, 6:21:00 PM] Al: please review report.pdf (file attached) before our call',
+      '[6/6/24, 6:22:00 PM] Al: the document omitted a key clause',
+    ].join('\n'));
+    const fpMsgs = m.parseWhatsAppExport(fpFile, { provider:'whatsapp', accountId:'work', chatId:'c@g.us' });
+    eq(fpMsgs[0].kind, 'text', 'mid-sentence-image-omitted-stays-text');
+    eq(fpMsgs[0].text, 'the image omitted from the report was important', 'mid-sentence-image-omitted-text-intact');
+    eq(fpMsgs[1].kind, 'text', 'mid-sentence-file-attached-stays-text');
+    eq(fpMsgs[1].text, 'please review report.pdf (file attached) before our call', 'mid-sentence-file-attached-text-intact');
+    eq(fpMsgs[2].kind, 'text', 'mid-sentence-document-omitted-stays-text');
+    eq(fpMsgs[2].text, 'the document omitted a key clause', 'mid-sentence-document-omitted-text-intact');
+
     // System/notice line: timestamp but no 'Sender:' -> kind system, null sender.
     const sys = msgs.find(x => x.kind === 'system');
     eq(!!sys, true, 'system-line-present');

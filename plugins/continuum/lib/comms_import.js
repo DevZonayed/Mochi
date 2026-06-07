@@ -93,25 +93,34 @@ function toEpochSeconds(date, time, ampm, tzMinutes) {
 // Attachment / media markers WhatsApp writes in the text export. The real bytes
 // are NOT in the .txt, so media is null; we record the KIND and keep any caption.
 // Returns { kind, text } where text is the caption (media markers carry none).
+//
+// EACH marker is anchored to the ENTIRE trimmed body (^…$, allowing an optional
+// leading U+200E/U+200F directional mark that some exports prepend). In real
+// WhatsApp text exports the marker IS the whole message — it never appears as a
+// substring of conversational prose. Anchoring is REQUIRED for correctness: an
+// unanchored `\bimage omitted\b` would also match (and silently mangle) an
+// ordinary line like "the image omitted from the report was important",
+// misclassifying it as kind:'image', stripping the matched words, and changing
+// the text — which changes the fingerprint and breaks dedupe for that message.
+const LEAD = "[‎‏]*\\s*"; // optional leading directional mark(s) + whitespace
 const MEDIA_MARKERS = [
-  { re: /<Media omitted>/i, kind: "image" },          // generic; exact kind is unknowable from text
-  { re: /\bimage omitted\b/i, kind: "image" },
-  { re: /\bvideo omitted\b/i, kind: "video" },
-  { re: /\baudio omitted\b/i, kind: "audio" },
-  { re: /\bsticker omitted\b/i, kind: "image" },
-  { re: /\bGIF omitted\b/i, kind: "video" },
-  { re: /\bdocument omitted\b/i, kind: "document" },
-  { re: /\bContact card omitted\b/i, kind: "system" },
-  { re: /[‎‏]*\S+\.\w+\s*\(file attached\)/i, kind: "document" }, // "IMG-001.jpg (file attached)"
+  { re: new RegExp(`^${LEAD}<Media omitted>\\s*$`, "i"), kind: "image" }, // generic; exact kind is unknowable from text
+  { re: new RegExp(`^${LEAD}image omitted\\s*$`, "i"), kind: "image" },
+  { re: new RegExp(`^${LEAD}video omitted\\s*$`, "i"), kind: "video" },
+  { re: new RegExp(`^${LEAD}audio omitted\\s*$`, "i"), kind: "audio" },
+  { re: new RegExp(`^${LEAD}sticker omitted\\s*$`, "i"), kind: "image" },
+  { re: new RegExp(`^${LEAD}GIF omitted\\s*$`, "i"), kind: "video" },
+  { re: new RegExp(`^${LEAD}document omitted\\s*$`, "i"), kind: "document" },
+  { re: new RegExp(`^${LEAD}Contact card omitted\\s*$`, "i"), kind: "system" },
+  { re: new RegExp(`^${LEAD}\\S+\\.\\w+\\s*\\(file attached\\)\\s*$`, "i"), kind: "document" }, // "IMG-001.jpg (file attached)"
 ];
 
 function classifyBody(body) {
   const trimmed = (body || "").trim();
   for (const { re, kind } of MEDIA_MARKERS) {
     if (re.test(trimmed)) {
-      // Strip the marker token to recover any caption text that follows it.
-      const caption = trimmed.replace(re, "").trim();
-      return { kind, text: caption };
+      // A media marker IS the whole body, so it carries no caption text.
+      return { kind, text: "" };
     }
   }
   return { kind: "text", text: body };
