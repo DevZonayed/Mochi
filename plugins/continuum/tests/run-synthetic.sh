@@ -530,6 +530,55 @@ import('$PLUGIN_DIR/lib/paths.js').then((m) => {
 ")
 echo "$T35_OUT" | grep -qF "PATHS OK" && ok "comms path helpers resolve correctly" || { fail "comms paths: $T35_OUT"; }
 
+# ---- T36: comms_config read/merge/defaults/decline/atomic-write ------------
+echo
+echo "T36 — comms_config merge + defaults + atomic write"
+CFG_REPO="$(mktemp -d -t continuum-synth-cfg.XXXXXX)"
+T36_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/comms_config.js').then((m) => {
+  import('$PLUGIN_DIR/lib/paths.js').then((P) => {
+    const fs = require('node:fs');
+    const d = '$CFG_REPO';
+    let bad = 0;
+    const eq = (a,b,label) => { if (JSON.stringify(a)!==JSON.stringify(b)) { console.log('FAIL',label,'got',JSON.stringify(a),'want',JSON.stringify(b)); bad++; } };
+
+    // (a) no file -> defaults
+    const def = m.readConfig(d);
+    eq(def, {version:1, decided:false, declined:false, providers:{}}, 'defaults');
+
+    // (b) short/old committed config -> version defaulted, missing keys filled
+    fs.mkdirSync(P.commsDir(d), {recursive:true});
+    fs.writeFileSync(P.commsConfigPath(d), JSON.stringify({decided:true, declined:true}));
+    const declined = m.readConfig(d);
+    eq(declined.version, 1, 'version-default-on-short-config');
+    eq(declined.declined, true, 'declined-true');
+    eq(declined.providers, {}, 'providers-default-filled');
+
+    // (c) local overlay wins over committed (declined committed, enabled locally)
+    fs.writeFileSync(P.commsLocalConfigPath(d), JSON.stringify({decided:true, declined:false, providers:{whatsapp:{accounts:{}}}}));
+    const merged = m.readConfig(d);
+    eq(merged.declined, false, 'local-wins-declined');
+    eq(merged.providers.whatsapp, {accounts:{}}, 'local-wins-providers');
+
+    // (d) writeConfig is atomic (no leftover tmp) and round-trips
+    const cfg = {version:1, decided:true, declined:false, providers:{whatsapp:{accounts:{work:{capture:'session',mode:'strict',allowed_jids:['c@g.us']}}}}};
+    m.writeConfig(d, cfg);
+    const onDisk = JSON.parse(fs.readFileSync(P.commsConfigPath(d),'utf8'));
+    eq(onDisk, cfg, 'writeConfig-roundtrip');
+    const leftovers = fs.readdirSync(P.commsDir(d)).filter(f => f.includes('.tmp'));
+    eq(leftovers, [], 'no-tmp-leftover');
+
+    // (e) declineConfig helper writes exact decline shape
+    const dec = m.declineConfig();
+    eq(dec, {version:1, decided:true, declined:true}, 'decline-shape');
+
+    console.log(bad === 0 ? 'CONFIG OK' : 'CONFIG BAD ' + bad);
+  });
+});
+")
+echo "$T36_OUT" | grep -qF "CONFIG OK" && ok "comms_config merge/defaults/decline/atomic" || { fail "comms_config: $T36_OUT"; }
+rm -rf "$CFG_REPO"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
