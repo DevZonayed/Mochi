@@ -16,11 +16,12 @@ Two layers of test:
 bash plugins/continuum/tests/run-synthetic.sh
 ```
 
-Exit code 0 means all 45 invariants passed. Failures print the assertion + the offending state.
+Exit code 0 means all 100 invariants passed. Failures print the assertion + the offending state.
 
 This simulates Claude's hook lifecycle by feeding crafted JSON to each hook script and asserting on file outputs. It catches regressions in:
 - **Phase 1**: bootstrap detection, link id sequencing, transcript gzip, sentinel flow, SessionStart token budget, status output, malformed-input tolerance
 - **Phase 2**: recall keyword+tag scoring, recall over archived links, dream candidate selection, dream finalize (write digest + move originals + write tombstones), index append-only invariant under rollup, MCP server handshake + tools/list + tools/call, feedback dedup by normalized title, dry-run flush moves items to sent/
+- **Comms layer (T35–T54)**: path helpers, config merge/defaults/atomic-write, allowlist normalize/isAllowed/group-grant, dedupe fingerprint symmetry, dedupe reconcileImport, store cursor read/write, store appendMessage idempotency + live-wins, store getSlice sort/clamp/byte-budget/continuation, store listChats allowlist-filtered, comms_recall scoring/caps/allowlist-scope (T44–T54)
 
 ---
 

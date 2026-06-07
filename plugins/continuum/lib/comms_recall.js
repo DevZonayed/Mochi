@@ -6,13 +6,10 @@
 // (each hit: chatId, tsIso, senderName, excerpt, msgId) and §4.3 caps
 // (default limit 10, HARD max 200 clamp). Returns a slice, never the store.
 
-import fs from "node:fs";
-import {
-  commsMessagesPath,
-} from "./paths.js";
 import { readConfig } from "./comms_config.js";
 import { isAllowed, normalizeJid } from "./comms_allowlist.js";
 import { tokenizeStemmed, termFrequency } from "./scoring.js";
+import { readAllMessages } from "./comms_store.js";
 
 // §4.3 efficiency invariants — enforced server-side, not caller-overridable.
 const DEFAULT_LIMIT = 10;
@@ -64,19 +61,6 @@ function allowedChats(cfg, { provider, accountId, chatId }) {
   return out;
 }
 
-// Read + parse one chat's messages.jsonl (best-effort; tolerate bad lines).
-function readShard(projectDir, provider, accountId, chatId) {
-  const file = commsMessagesPath(projectDir, provider, accountId, chatId);
-  if (!fs.existsSync(file)) return [];
-  const raw = fs.readFileSync(file, "utf8");
-  const msgs = [];
-  for (const line of raw.split("\n")) {
-    if (!line.trim()) continue;
-    try { msgs.push(JSON.parse(line)); } catch { /* skip malformed */ }
-  }
-  return msgs;
-}
-
 export function commsRecall(projectDir, opts = {}) {
   if (!projectDir) throw new Error("commsRecall: projectDir required");
   const { query, provider, accountId, chatId, since, until } = opts;
@@ -96,7 +80,7 @@ export function commsRecall(projectDir, opts = {}) {
   let totalScanned = 0;
 
   for (const t of targets) {
-    const msgs = readShard(projectDir, t.provider, t.accountId, t.chatId);
+    const msgs = readAllMessages(projectDir, t.provider, t.accountId, t.chatId);
     for (const m of msgs) {
       // Window filter on epoch-second ts (authoritative for ordering).
       if (since != null && Number(m.ts) < Number(since)) continue;
