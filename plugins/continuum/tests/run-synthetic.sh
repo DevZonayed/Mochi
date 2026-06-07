@@ -684,6 +684,50 @@ import('$PLUGIN_DIR/lib/comms_dedupe.js').then((m) => {
 ")
 echo "$T38_OUT" | grep -qF "FP OK" && ok "comms_dedupe fingerprint symmetric + no-ordinal" || { fail "comms_dedupe fp: $T38_OUT"; }
 
+# ---- T39: comms_dedupe reconcileImport — greedy 1:1, intra-minute ordinal --
+echo
+echo "T39 — comms_dedupe reconcileImport greedy 1:1 + ordinal"
+T39_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/comms_dedupe.js').then((m) => {
+  let bad = 0;
+  const eq = (a,b,label) => { if (JSON.stringify(a)!==JSON.stringify(b)) { console.log('FAIL',label,'got',JSON.stringify(a),'want',JSON.stringify(b)); bad++; } };
+
+  const mk = (over) => ({ chatId:'c@g.us', accountId:'work', provider:'whatsapp', senderId:'19999999999@s.whatsapp.net', text:'ok', media:null, fromMe:false, kind:'text', reply_to:null, ...over });
+
+  // Existing: ONE live 'ok' at 1717700000 (minute M). Import has TWO 'ok' in
+  // that same minute (N=2 > M=1). Greedy 1:1: import[0] matches the live record
+  // (dropped as dup, live wins); import[1] is unmatched -> NEW record with an
+  // ordinal-folded synthetic msgId.
+  const existing = [ mk({ ts:1717700000, msgId:'LIVE1', source:'live' }) ];
+  const imports = [
+    mk({ ts:1717700010, source:'import' }),  // export line order = ordinal source
+    mk({ ts:1717700020, source:'import' }),
+  ];
+  const r = m.reconcileImport(existing, imports);
+
+  eq(r.added.length, 1, 'one-new-import-record');
+  eq(r.merged.length, 2, 'merged-has-live-plus-one-import');
+  // live record survives untouched
+  eq(r.merged.some(x => x.msgId === 'LIVE1' && x.source === 'live'), true, 'live-wins-kept');
+  // the new import record has a synthetic import: msgId carrying the ordinal
+  const newRec = r.added[0];
+  eq(/^import:[0-9a-f]{40}$/.test(newRec.msgId), true, 'synthetic-msgId-shape');
+  eq(newRec.source, 'import', 'new-record-source-import');
+
+  // Idempotent re-import: running the SAME import again adds nothing new.
+  const r2 = m.reconcileImport(r.merged, imports);
+  eq(r2.added.length, 0, 'reimport-idempotent-no-new');
+
+  // N <= M case: 1 import 'ok', existing already has 2 live 'ok' -> 0 added.
+  const existing2 = [ mk({ts:1717700000,msgId:'L1',source:'live'}), mk({ts:1717700005,msgId:'L2',source:'live'}) ];
+  const r3 = m.reconcileImport(existing2, [ mk({ts:1717700001,source:'import'}) ]);
+  eq(r3.added.length, 0, 'N<=M-no-new');
+
+  console.log(bad === 0 ? 'RECON OK' : 'RECON BAD ' + bad);
+});
+")
+echo "$T39_OUT" | grep -qF "RECON OK" && ok "comms_dedupe reconcileImport greedy 1:1 + ordinal" || { fail "comms_dedupe reconcile: $T39_OUT"; }
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
