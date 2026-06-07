@@ -828,16 +828,43 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
 
     // EDGE CASE (b): import stored first, then live record of same logical message
     // arrives (reverse live-wins). Per spec §4.2 live wins unconditionally; the
-    // live record must be appended, count must advance.
+    // import record must be superseded (removed) and the live record stored in its
+    // place. count must NOT inflate — one logical message stays one record.
     const base3 = { ...base, chatId:'c3@g.us' };
     // Step 1: import stored first (simulates history import before live delivery)
     const rImp = m.appendMessage(d, withFp({ ...base3, msgId:'import:hist', ts:1717700200, text:'hello', source:'import' }));
     eq(rImp.appended, true, 'reverse-lw-import-first-appended');
     eq(m.readCursor(d,'whatsapp','work','c3@g.us').count, 1, 'reverse-lw-count-1');
-    // Step 2: live re-delivery of the same logical message arrives later
+    // Step 2: live re-delivery of the same logical message arrives later.
+    // The import record is superseded; live wins and replaces it — count stays 1.
     const rLive = m.appendMessage(d, withFp({ ...base3, msgId:'LIVE_ZZZ', ts:1717700210, text:'hello', source:'live' }));
     eq(rLive.appended, true, 'reverse-lw-live-wins-appended');
-    eq(m.readCursor(d,'whatsapp','work','c3@g.us').count, 2, 'reverse-lw-count-2-live-wins');
+    eq(m.readCursor(d,'whatsapp','work','c3@g.us').count, 1, 'reverse-lw-count-stays-1-not-inflated');
+    // Readback: the store must hold exactly ONE record and it must be the live one.
+    const c3Msgs = m.readAllMessages(d,'whatsapp','work','c3@g.us');
+    eq(c3Msgs.length, 1, 'reverse-lw-store-has-exactly-1-record');
+    eq(c3Msgs[0].msgId, 'LIVE_ZZZ', 'reverse-lw-stored-record-is-live');
+    eq(c3Msgs[0].source, 'live', 'reverse-lw-stored-record-source-is-live');
+
+    // EDGE CASE (c): loop-ordering — store already has BOTH an import-dup AND a
+    // real-dup (same fingerprint, same source) for the same fingerprint. An
+    // incoming IMPORT must scan past the import match (would be a same-source
+    // collision — must NOT suppress) to find the real-dup (live record) and drop
+    // correctly. Verifies the subtle loop ordering in the Tier-2 scan.
+    const base4 = { ...base, chatId:'c4@g.us' };
+    const fp4 = D.fingerprint({ ...base4, ts:1717700300, text:'yo', source:'live' });
+    // Seed: one live record + one distinct-msgId live record (same content, same minute)
+    // These simulate two real user messages with same content — both stored.
+    m.appendMessage(d, { ...base4, msgId:'REAL_A4', ts:1717700300, text:'yo', source:'live', fingerprint: fp4 });
+    m.appendMessage(d, { ...base4, msgId:'REAL_B4', ts:1717700305, text:'yo', source:'live', fingerprint: fp4 });
+    eq(m.readCursor(d,'whatsapp','work','c4@g.us').count, 2, 'loop-ord-seed-count-2');
+    // Now an import arrives with the same fingerprint. It should be dropped because
+    // a live record exists (forward live-wins path). The scan must encounter the
+    // REAL_A4 live match first and return duplicate-fingerprint-live-wins.
+    const rImpC4 = m.appendMessage(d, { ...base4, msgId:'import:c4z', ts:1717700302, text:'yo', source:'import', fingerprint: fp4 });
+    eq(rImpC4.appended, false, 'loop-ord-import-dropped-when-live-exists');
+    eq(rImpC4.reason, 'duplicate-fingerprint-live-wins', 'loop-ord-reason');
+    eq(m.readCursor(d,'whatsapp','work','c4@g.us').count, 2, 'loop-ord-count-unchanged');
 
     console.log(bad === 0 ? 'APPEND OK' : 'APPEND BAD ' + bad);
   });
