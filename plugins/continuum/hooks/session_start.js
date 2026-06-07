@@ -12,9 +12,17 @@ import {
   readStateMd,
   readConfig,
   estimateTokens,
+  commsConfigPath,
+  commsCursorPath,
 } from "../lib/paths.js";
 import { readSentinel } from "../lib/archive.js";
 import { register as brokerRegister } from "../lib/broker.js";
+import { readConfig as readCommsConfig } from "../lib/comms_config.js";
+import {
+  readState as readCommsState,
+  readSeen as readCommsSeen,
+  accountStatuses,
+} from "../lib/comms_state.js";
 
 // Resolve the directory that holds the continuum plugin's lib/ — works
 // regardless of whether continuum is bundled inside super-tester or loaded
@@ -179,9 +187,127 @@ function computeDefaultSessionName(projectDir) {
   }
 }
 
-// Temporary stub — replaced by the real comms gate in the next task.
-function commsGate() {
-  return "";
+// Comms init / onboarding / freshness gate (spec §8). fs-only — the hook can't
+// call MCP tools, so all state comes from files the comms MCP writes:
+// comms/config.json (+ config.local.json), state.json, .last-session-seen.json.
+// Returns a string to APPEND to the single context accumulator ("" = silent).
+function commsGate(projectDir, source) {
+  let out = "";
+  let cfg;
+  try {
+    cfg = readCommsConfig(projectDir);
+  } catch {
+    return ""; // never let the comms gate break SessionStart
+  }
+
+  // 1) Undecided → ASK, but only on a real init (startup/clear). Staying silent
+  //    on resume/compact avoids re-nagging after a verbal "yes" that hasn't been
+  //    written to config yet.
+  if (!cfg.decided) {
+    if (source === "startup" || source === "clear") {
+      out +=
+        "\n\n---\n\n" +
+        "[continuum:comms] This repo hasn't decided about communication-channel sync. " +
+        'Ask the user, once: *"Do you want this repo to sync a communication channel ' +
+        '(e.g. WhatsApp) so I can recall its messages? (yes/no)"* — On **no**, immediately ' +
+        "write `.continuum/comms/config.json` = `{\"version\":1,\"decided\":true,\"declined\":true}` " +
+        "so I never ask again. On **yes**, immediately write " +
+        "`{\"version\":1,\"decided\":true,\"declined\":false}` (no provider yet) **before** anything " +
+        "else, then run `/mochi:comms-setup`. Always write the answer to config the moment it's given.";
+    }
+    return out; // undecided: nothing else to say
+  }
+
+  // 2) Declined → silent forever.
+  if (cfg.declined) return out;
+
+  // 3) Decided + enabled: gather configured accounts and their link status.
+  let state = {};
+  try {
+    state = readCommsState(projectDir);
+  } catch {}
+  const statuses = accountStatuses(state); // [{provider, accountId, status, ...}]
+
+  // Configured accounts (from config.providers) — the source of truth for "what
+  // SHOULD be linked". An account configured but absent from state.json, or with
+  // a non-connected status, needs onboarding.
+  const configured = [];
+  const providers = cfg.providers || {};
+  for (const provider of Object.keys(providers)) {
+    const accounts = (providers[provider] || {}).accounts || {};
+    for (const accountId of Object.keys(accounts)) {
+      configured.push({ provider, accountId });
+    }
+  }
+
+  const statusOf = (provider, accountId) => {
+    const hit = statuses.find(
+      (s) => s.provider === provider && s.accountId === accountId
+    );
+    return hit ? hit.status : "needs_login";
+  };
+
+  const needsLogin = configured.filter(
+    (c) => statusOf(c.provider, c.accountId) !== "connected"
+  );
+
+  // If the user said yes but never finished setup (no providers configured), or
+  // a configured account isn't connected, point them at onboarding.
+  if (configured.length === 0 || needsLogin.length > 0) {
+    out +=
+      "\n\n---\n\n" +
+      "[continuum:comms] Channel sync is enabled for this repo but " +
+      (configured.length === 0
+        ? "no provider is linked yet. "
+        : `${needsLogin.length} account(s) need login (` +
+          needsLogin.map((c) => `${c.provider}/${c.accountId}`).join(", ") +
+          "). ") +
+      "Run `/mochi:comms-setup` to finish linking.";
+    return out;
+  }
+
+  // 4) Decided + all connected → freshness note (best-effort). Diff each
+  //    allowlisted chat's cursor.newestTs against the watermark.
+  let seen = {};
+  try {
+    seen = readCommsSeen(projectDir);
+  } catch {}
+
+  let totalNew = 0;
+  const freshChats = [];
+  for (const provider of Object.keys(providers)) {
+    const accounts = (providers[provider] || {}).accounts || {};
+    for (const accountId of Object.keys(accounts)) {
+      const allowed = accounts[accountId].allowed_jids || [];
+      for (const chatId of allowed) {
+        let newestTs = null;
+        try {
+          const cur = JSON.parse(
+            fs.readFileSync(
+              commsCursorPath(projectDir, provider, accountId, chatId),
+              "utf8"
+            )
+          );
+          newestTs = typeof cur.newestTs === "number" ? cur.newestTs : null;
+        } catch {}
+        if (newestTs == null) continue;
+        const watermark = seen[`${provider}/${accountId}/${chatId}`] ?? 0;
+        if (newestTs > watermark) {
+          totalNew += 1;
+          freshChats.push(`${provider}/${accountId}/${chatId}`);
+        }
+      }
+    }
+  }
+
+  if (freshChats.length > 0) {
+    out +=
+      "\n\n---\n\n" +
+      `[continuum:comms] You have new message activity since you last looked in ${freshChats.length} ` +
+      `chat(s): ${freshChats.join(", ")}. Use \`/mochi:comms-recall\` or \`/mochi:comms-status\` to review.`;
+  }
+  // If state.json was absent (degrade) or nothing new, stay silent.
+  return out;
 }
 
 async function main() {

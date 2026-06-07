@@ -1326,6 +1326,56 @@ F57_CTX="$(echo "$F57_OUT" | extract_ctx)"
 echo "$F57_CTX" | grep -q "No context chain" && ok "bootstrap directive still present via accumulator" || fail "bootstrap directive lost in refactor"
 rm -rf "$F57REPO"
 
+# ---- T58: comms gate branches (ASK source-aware / declined / onboard / fresh) -
+echo
+echo "T58 — comms gate: ASK on startup, silent on resume, declined silent, onboard, freshness"
+gate_ctx() {  # $1=repo $2=source ; bootstrap the chain so we're past the bootstrap branch
+  run_hook hooks/session_start.js "{\"session_id\":\"sgate\",\"cwd\":\"$1\",\"hook_event_name\":\"SessionStart\",\"source\":\"$2\"}" | extract_ctx
+}
+mk_gate_repo() {  # bootstrapped repo so commsGate is reached
+  local r; r="$(mktemp -d -t continuum-synth-gate.XXXXXX)"
+  git -C "$r" init -q
+  mkdir -p "$r/.continuum/chain/links/0001" "$r/.continuum/comms"
+  echo '{"id":1,"ts":"2026-05-18T10:00:00Z","commit":null,"summary_tokens":10,"tags":["bootstrap"]}' > "$r/.continuum/chain/index.jsonl"
+  echo "x" > "$r/.continuum/chain/links/0001/summary.md"; echo '{}' > "$r/.continuum/chain/links/0001/refs.json"
+  echo "# S" > "$r/.continuum/STATE.md"
+  echo "$r"
+}
+
+# (a) undecided + startup → ASK
+GA="$(mk_gate_repo)"
+# no comms/config.json → undecided
+gate_ctx "$GA" startup | grep -q "hasn't decided about communication-channel sync" && ok "ASK emitted on startup when undecided" || fail "ASK missing on startup"
+# (b) undecided + resume → silent (no ASK)
+gate_ctx "$GA" resume | grep -q "hasn't decided about communication-channel sync" && fail "ASK wrongly emitted on resume" || ok "silent on resume when undecided"
+rm -rf "$GA"
+
+# (c) declined → silent on startup
+GB="$(mk_gate_repo)"
+echo '{"version":1,"decided":true,"declined":true}' > "$GB/.continuum/comms/config.json"
+GBCTX="$(gate_ctx "$GB" startup)"
+echo "$GBCTX" | grep -q "hasn't decided about communication-channel sync" && fail "ASK emitted despite declined" || ok "declined → no ASK"
+echo "$GBCTX" | grep -qi "comms-setup" && fail "onboard emitted despite declined" || ok "declined → no onboard"
+rm -rf "$GB"
+
+# (d) decided + account needs_login → ONBOARD
+GC="$(mk_gate_repo)"
+echo '{"version":1,"decided":true,"declined":false,"providers":{"whatsapp":{"accounts":{"work":{"capture":"session","mode":"strict","allowed_jids":["123@g.us"]}}}}}' > "$GC/.continuum/comms/config.json"
+echo '{"whatsapp":{"work":{"status":"needs_login","updatedAt":1717700000}}}' > "$GC/.continuum/comms/state.json"
+gate_ctx "$GC" startup | grep -q "comms-setup" && ok "onboard directive emitted when account needs_login" || fail "onboard missing for needs_login"
+rm -rf "$GC"
+
+# (e) decided + connected + new messages → freshness note
+GD="$(mk_gate_repo)"
+echo '{"version":1,"decided":true,"declined":false,"providers":{"whatsapp":{"accounts":{"work":{"capture":"session","mode":"strict","allowed_jids":["123@g.us"]}}}}}' > "$GD/.continuum/comms/config.json"
+echo '{"whatsapp":{"work":{"status":"connected","updatedAt":1717700000}}}' > "$GD/.continuum/comms/state.json"
+mkdir -p "$GD/.continuum/comms/store/whatsapp/work/123@g.us"
+echo '{"newestId":"m9","newestTs":1717800000,"oldestId":"m1","oldestTs":1717700000,"count":9}' > "$GD/.continuum/comms/store/whatsapp/work/123@g.us/cursor.json"
+# watermark behind the cursor → there ARE new messages
+echo '{"whatsapp/work/123@g.us":1717700500}' > "$GD/.continuum/comms/.last-session-seen.json"
+gate_ctx "$GD" startup | grep -qi "new message" && ok "freshness note emitted when cursor ahead of watermark" || fail "freshness note missing"
+rm -rf "$GD"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
