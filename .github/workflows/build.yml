@@ -44,7 +44,9 @@ jobs:
       - name: Verify bundle produced
         run: |
           test -f server/dist/server.bundle.mjs
-          echo "Bundle size: $(du -h server/dist/server.bundle.mjs | cut -f1)"
+          test -f server/dist/comms.bundle.mjs
+          echo "Browser bundle size: $(du -h server/dist/server.bundle.mjs | cut -f1)"
+          echo "Comms bundle size: $(du -h server/dist/comms.bundle.mjs | cut -f1)"
 
       - name: Commit bundle if it changed
         run: |
