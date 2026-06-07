@@ -207,6 +207,13 @@ export class WhatsAppProvider extends CommsProvider {
         return;
       }
       if (update.connection === "close") {
+        // Stale-socket guard: if this socket is no longer the account's current
+        // socket (it was replaced by a reconnect, or torn down by unlink()), do
+        // NOT act on its close. Without this, unlink()'s sock.end() — or a real
+        // baileys end(undefined), which emits a CODE-LESS close — would fall into
+        // the bounded-reconnect branch below and resurrect an account the user
+        // explicitly unlinked (re-creating auth that _wipeAuth just deleted).
+        if (this.sockets.get(accountId) !== sock) return;
         const code = this._statusCode(update);
         if (code === 401) {
           // loggedOut: wipe auth, surface re-login, DO NOT reconnect.
@@ -277,16 +284,28 @@ export class WhatsAppProvider extends CommsProvider {
 
   // getMessages: best-effort read of normalized Msgs from the local store
   // (display/backfill). HARD caps + ordering are enforced by getSlice.
+  //
+  // Read-side allowlist enforcement (§6.4 'get/list/recall only ever return
+  // allowlisted chats'): like its siblings (listChats filters via storeListChats;
+  // comms_recall scans only allowlisted chats), getMessages refuses to read a chat
+  // that is not allowlisted for this account — defense-in-depth, not merely the
+  // capture-side invariant. Returns [] for a non-allowlisted chatId.
+  //
+  // Signature: getMessages(accountId, chatId, {limit, continuation}). The base
+  // class previously advertised {limit,before,after}, but getSlice has no
+  // before/after windowing (it honors only limit/byteBudget/continuation), so the
+  // dead before/after params are NOT forwarded — paging is via continuation.
   async getMessages(accountId, chatId, opts = {}) {
     const projectDir = this.projectDirFor(accountId);
     const normChatId = normalizeJid(chatId);
+    const cfg = readConfig(projectDir);
+    if (!isAllowed(cfg, "whatsapp", accountId, normChatId)) return [];
     const { messages } = getSlice(projectDir, {
       provider: "whatsapp",
       accountId,
       chatId: normChatId,
       limit: opts.limit,
-      before: opts.before,
-      after: opts.after,
+      continuation: opts.continuation,
     });
     return messages;
   }
@@ -296,15 +315,23 @@ export class WhatsAppProvider extends CommsProvider {
   // state so a subsequent link() starts clean.
   async unlink(accountId) {
     const sock = this.sockets.get(accountId);
+    // Mark torn-down and forget the socket BEFORE end(). On a real baileys socket,
+    // end(undefined) synchronously emits connection.update {connection:'close',
+    // lastDisconnect:{error: undefined}} — a CODE-LESS close. The connection.update
+    // handler wired by _wireConnection is still attached; if the account were still
+    // tracked at that point, the code-less close would hit the bounded-reconnect
+    // branch and resurrect the account we are tearing down. Deleting from
+    // this.sockets first makes the handler's stale-socket guard (this.sockets.get
+    // !== sock) bail.
+    this.sockets.delete(accountId);
+    this.statuses.delete(accountId);
+    this._reconnects.delete(accountId);
     if (sock) {
       try { sock.end?.(); } catch {}
     }
     const authDir = this.getSessionDir(accountId);
     try { await releaseLock(authDir); } catch {}
     await this._wipeAuth(accountId);
-    this.sockets.delete(accountId);
-    this.statuses.delete(accountId);
-    this._reconnects.delete(accountId);
   }
 
   // link: open a socket (if needed) and resolve to QR or pairing code.

@@ -199045,6 +199045,7 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
         return;
       }
       if (update.connection === "close") {
+        if (this.sockets.get(accountId) !== sock) return;
         const code = this._statusCode(update);
         if (code === 401) {
           this.statuses.set(accountId, "logged_out");
@@ -199110,16 +199111,28 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
   }
   // getMessages: best-effort read of normalized Msgs from the local store
   // (display/backfill). HARD caps + ordering are enforced by getSlice.
+  //
+  // Read-side allowlist enforcement (§6.4 'get/list/recall only ever return
+  // allowlisted chats'): like its siblings (listChats filters via storeListChats;
+  // comms_recall scans only allowlisted chats), getMessages refuses to read a chat
+  // that is not allowlisted for this account — defense-in-depth, not merely the
+  // capture-side invariant. Returns [] for a non-allowlisted chatId.
+  //
+  // Signature: getMessages(accountId, chatId, {limit, continuation}). The base
+  // class previously advertised {limit,before,after}, but getSlice has no
+  // before/after windowing (it honors only limit/byteBudget/continuation), so the
+  // dead before/after params are NOT forwarded — paging is via continuation.
   async getMessages(accountId, chatId, opts = {}) {
     const projectDir = this.projectDirFor(accountId);
     const normChatId = normalizeJid(chatId);
+    const cfg = readConfig(projectDir);
+    if (!isAllowed(cfg, "whatsapp", accountId, normChatId)) return [];
     const { messages } = getSlice(projectDir, {
       provider: "whatsapp",
       accountId,
       chatId: normChatId,
       limit: opts.limit,
-      before: opts.before,
-      after: opts.after
+      continuation: opts.continuation
     });
     return messages;
   }
@@ -199128,6 +199141,9 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
   // state so a subsequent link() starts clean.
   async unlink(accountId) {
     const sock = this.sockets.get(accountId);
+    this.sockets.delete(accountId);
+    this.statuses.delete(accountId);
+    this._reconnects.delete(accountId);
     if (sock) {
       try {
         sock.end?.();
@@ -199140,9 +199156,6 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
     } catch {
     }
     await this._wipeAuth(accountId);
-    this.sockets.delete(accountId);
-    this.statuses.delete(accountId);
-    this._reconnects.delete(accountId);
   }
   // link: open a socket (if needed) and resolve to QR or pairing code.
   // opts: { phone? }. deps: { makeSocket?, qrToDataUrl? } (injectable for tests).
