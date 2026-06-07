@@ -960,6 +960,49 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
 echo "$T42_OUT" | grep -qF "SLICE OK" && ok "comms_store getSlice sort/clamp/byte-budget/continuation" || { fail "comms_store slice: $T42_OUT"; }
 rm -rf "$SL_REPO"
 
+# ---- T43: comms_store listChats — allowlist-filtered + meta + cursor -------
+echo
+echo "T43 — comms_store listChats (allowlist filtered)"
+LC_REPO="$(mktemp -d -t continuum-synth-lc.XXXXXX)"
+T43_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
+  import('$PLUGIN_DIR/lib/comms_dedupe.js').then((D) => {
+    import('$PLUGIN_DIR/lib/paths.js').then((P) => {
+      const fs = require('node:fs');
+      const d = '$LC_REPO';
+      let bad = 0;
+      const eq = (a,b,label) => { if (JSON.stringify(a)!==JSON.stringify(b)) { console.log('FAIL',label,'got',JSON.stringify(a),'want',JSON.stringify(b)); bad++; } };
+      const mk = (chatId, ts, text) => { const o = { provider:'whatsapp', accountId:'work', chatId, msgId:'M'+ts, ts, tsIso:new Date(ts*1000).toISOString(), fromMe:false, senderId:'19999999999@s.whatsapp.net', senderName:'A', kind:'text', text, media:null, reply_to:null, source:'live' }; return { ...o, fingerprint: D.fingerprint(o) }; };
+
+      // two chats stored: one allowlisted ('c@g.us'), one not ('x@g.us')
+      m.appendMessage(d, mk('c@g.us', 1000, 'hi'));
+      m.appendMessage(d, mk('c@g.us', 1100, 'yo'));
+      m.appendMessage(d, mk('x@g.us', 1200, 'secret'));
+      // give the allowed chat a meta.json (name + chatKind)
+      fs.writeFileSync(P.commsMetaPath(d,'whatsapp','work','c@g.us'),
+        JSON.stringify({ name:'Team', chatKind:'group', updatedAt:1100 }));
+
+      // allowedJids structural filter: only c@g.us is returned
+      const allowed = ['123@s.whatsapp.net','c@g.us'].map(s=>s); // includes c@g.us
+      const chats = m.listChats(d, allowed);
+      eq(chats.length, 1, 'only-allowlisted-chat-returned');
+      eq(chats[0].chatId, 'c@g.us', 'chat-id');
+      eq(chats[0].name, 'Team', 'name-from-meta');
+      eq(chats[0].chatKind, 'group', 'chatKind-from-meta');
+      eq(chats[0].count, 2, 'count-from-cursor');
+      eq(chats[0].newestTs, 1100, 'newestTs-from-cursor');
+
+      // null allowedJids -> nothing leaks (strict-by-default)
+      eq(m.listChats(d, null).length, 0, 'null-allowed-returns-none');
+
+      console.log(bad === 0 ? 'LIST OK' : 'LIST BAD ' + bad);
+    });
+  });
+});
+")
+echo "$T43_OUT" | grep -qF "LIST OK" && ok "comms_store listChats allowlist-filtered" || { fail "comms_store listChats: $T43_OUT"; }
+rm -rf "$LC_REPO"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
