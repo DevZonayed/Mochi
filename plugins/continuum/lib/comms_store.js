@@ -11,9 +11,12 @@ import {
   commsChatDir,
   commsMessagesPath,
   commsCursorPath,
+  commsMetaPath,
+  commsDir,
   estimateTokens,
 } from "./paths.js";
 import { fingerprint } from "./comms_dedupe.js";
+import { normalizeJid } from "./comms_allowlist.js";
 
 const CURSOR_DEFAULT = { newestId: null, newestTs: 0, oldestId: null, oldestTs: 0, count: 0 };
 
@@ -199,4 +202,49 @@ export function getSlice(projectDir, opts) {
   }
 
   return { messages: out, limitApplied, continuation };
+}
+
+function readMetaSafe(file) {
+  if (!fs.existsSync(file)) return {};
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return {}; }
+}
+
+// listChats: enumerate stored chats across all providers/accounts under
+// store/, returning ONLY those whose chatId is in allowedJids (read-side
+// structural guarantee, §6.4). Each entry merges meta.json (name, chatKind)
+// and cursor.json (count, newest/oldest watermarks). A null/empty allowlist
+// returns nothing — strict by default.
+export function listChats(projectDir, allowedJids) {
+  if (!Array.isArray(allowedJids) || allowedJids.length === 0) return [];
+  const allowed = new Set(allowedJids.map(normalizeJid));
+
+  const storeRoot = path.join(commsDir(projectDir), "store");
+  if (!fs.existsSync(storeRoot)) return [];
+
+  const out = [];
+  for (const provider of fs.readdirSync(storeRoot)) {
+    const provDir = path.join(storeRoot, provider);
+    if (!fs.statSync(provDir).isDirectory()) continue;
+    for (const accountId of fs.readdirSync(provDir)) {
+      const acctDir = path.join(provDir, accountId);
+      if (!fs.statSync(acctDir).isDirectory()) continue;
+      for (const chatId of fs.readdirSync(acctDir)) {
+        const chatDir = path.join(acctDir, chatId);
+        if (!fs.statSync(chatDir).isDirectory()) continue;
+        if (!allowed.has(normalizeJid(chatId))) continue; // structural filter
+        const meta = readMetaSafe(commsMetaPath(projectDir, provider, accountId, chatId));
+        const cursor = readCursor(projectDir, provider, accountId, chatId);
+        out.push({
+          provider, accountId, chatId,
+          name: meta.name ?? null,
+          chatKind: meta.chatKind ?? null,
+          count: cursor.count,
+          newestTs: cursor.newestTs,
+          oldestTs: cursor.oldestTs,
+        });
+      }
+    }
+  }
+  out.sort((a, b) => (b.newestTs || 0) - (a.newestTs || 0));
+  return out;
 }
