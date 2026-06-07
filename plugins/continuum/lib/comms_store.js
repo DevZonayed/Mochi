@@ -72,16 +72,35 @@ export function appendMessage(projectDir, msg) {
       return { appended: false, reason: "duplicate-msgid" };
     }
   }
-  // Tier 2: cross-source identity by fingerprint. live/backfill win over import.
+  // Tier 2: CROSS-SOURCE identity by fingerprint. live/backfill win over import.
+  // Only fires when the incoming message and the existing record have different
+  // sources (one is live/backfill, the other is import). Same-source collisions
+  // (live-vs-live, import-vs-import) that cleared Tier 1 represent distinct
+  // real messages (different msgIds, same content/minute) and must NOT be
+  // suppressed — silent loss of a real user message.
+  const incomingIsReal = msg.source === "live" || msg.source === "backfill";
+  const incomingIsImport = msg.source === "import";
   for (const e of existing) {
     if (e.fingerprint === fp) {
       const existingIsReal = e.source === "live" || e.source === "backfill";
-      const incomingIsImport = msg.source === "import";
+      const existingIsImport = e.source === "import";
+
       if (existingIsReal && incomingIsImport) {
+        // Forward live-wins: live/backfill stored first, import dup arrives -> drop import.
         return { appended: false, reason: "duplicate-fingerprint-live-wins" };
       }
-      // otherwise treat as the same logical message already stored
-      return { appended: false, reason: "duplicate-fingerprint" };
+      if (existingIsImport && incomingIsReal) {
+        // Reverse live-wins: import stored first, live/backfill arrives later
+        // (re-delivery overlap). Per spec §4.2 live wins unconditionally.
+        // Replace the import record by writing the live record; the import line
+        // stays in the JSONL (append-only), but the live record supersedes it.
+        // We DO append the live record so cursor/count advance correctly.
+        break; // fall through to append below
+      }
+      // Same-source fingerprint collision (both live or both import) with a
+      // distinct msgId that cleared Tier 1: these are genuinely distinct messages
+      // (e.g. user sent 'ok' twice in the same minute). Do NOT suppress.
+      // Continue scanning for a different match; if none found, append.
     }
   }
 
