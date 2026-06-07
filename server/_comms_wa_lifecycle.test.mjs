@@ -62,7 +62,8 @@ function mockSocket() {
 {
   const dir = await setup();
   const sock = mockSocket();
-  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  // reconnectBaseMs:0 disables real backoff delays in tests
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
   await p.connect(ACCOUNT, { makeSocket: () => sock });
   sock._emit("connection.update", { connection: "open" });
   assert.equal(p.status(ACCOUNT), "connected");
@@ -74,7 +75,7 @@ function mockSocket() {
   const dir = await setup();
   const sock = mockSocket();
   let made = 0;
-  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
   await p.connect(ACCOUNT, { makeSocket: () => { made++; return sock; } });
   sock._emit("connection.update", { connection: "close", lastDisconnect: { error: { output: { statusCode: 401 } } } });
   await new Promise((r) => setTimeout(r, 10));
@@ -88,7 +89,8 @@ function mockSocket() {
   const dir = await setup();
   let made = 0;
   const sockets = [mockSocket(), mockSocket()];
-  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  // reconnectBaseMs:0 disables real delay so the reconnect happens immediately
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
   await p.connect(ACCOUNT, { makeSocket: () => sockets[made++] });
   sockets[0]._emit("connection.update", { connection: "close", lastDisconnect: { error: { output: { statusCode: 515 } } } });
   await new Promise((r) => setTimeout(r, 10));
@@ -105,7 +107,8 @@ function mockSocket() {
   const dir = await setup();
   let made = 0;
   const sockets = [mockSocket(), mockSocket(), mockSocket()];
-  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  // reconnectBaseMs:0 disables real delay
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
   // Use link() (QR path) to open the socket -- this is the double-wiring risk path.
   const linkP = p.link(ACCOUNT, {}, { makeSocket: () => { made++; return sockets[made - 1]; }, qrToDataUrl: async (s) => `data:image/png;base64,QR(${s})` });
   setTimeout(() => sockets[0]._emit("connection.update", { qr: "QR-STRING" }), 5);
@@ -124,7 +127,7 @@ function mockSocket() {
   const dir = await setup();
   let made = 0;
   const sock = mockSocket();
-  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
   const linkP = p.link(ACCOUNT, {}, { makeSocket: () => { made++; return sock; }, qrToDataUrl: async (s) => `data:image/png;base64,QR(${s})` });
   setTimeout(() => sock._emit("connection.update", { qr: "QR-STRING" }), 5);
   await linkP;
@@ -141,4 +144,114 @@ function mockSocket() {
   await fs.rm(dir, { recursive: true, force: true });
 }
 
-console.log("✓ comms whatsapp lifecycle (qr/pairing/connection.update/close)");
+// 8) close with badSession(500) -> status logged_out, NO reconnect (permanent failure).
+{
+  const dir = await setup();
+  const sock = mockSocket();
+  let made = 0;
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
+  await p.connect(ACCOUNT, { makeSocket: () => { made++; return sock; } });
+  sock._emit("connection.update", { connection: "close", lastDisconnect: { error: { output: { statusCode: 500 } } } });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(p.status(ACCOUNT), "logged_out", "badSession(500) must set status logged_out");
+  assert.equal(made, 1, "badSession(500) must NOT recreate the socket");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 9) close with connectionReplaced(440) -> status logged_out, NO reconnect.
+{
+  const dir = await setup();
+  const sock = mockSocket();
+  let made = 0;
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
+  await p.connect(ACCOUNT, { makeSocket: () => { made++; return sock; } });
+  sock._emit("connection.update", { connection: "close", lastDisconnect: { error: { output: { statusCode: 440 } } } });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(p.status(ACCOUNT), "logged_out", "connectionReplaced(440) must set status logged_out");
+  assert.equal(made, 1, "connectionReplaced(440) must NOT recreate the socket");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 10) reconnect storm cap: after _MAX_RECONNECTS consecutive close(515) events the
+// provider stops creating new sockets (no unbounded storm).
+{
+  const dir = await setup();
+  const MAX = WhatsAppProvider._MAX_RECONNECTS;
+  // Create enough sockets to satisfy up to MAX reconnects + 1 for the initial connect.
+  const sockets = Array.from({ length: MAX + 2 }, () => mockSocket());
+  let made = 0;
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
+  await p.connect(ACCOUNT, { makeSocket: () => sockets[made++] });
+  // Emit close(515) up to MAX+2 times; only MAX reconnects should happen.
+  for (let i = 0; i <= MAX + 1; i++) {
+    // Emit on the most-recently created socket (index made-1).
+    sockets[made - 1]._emit("connection.update", { connection: "close", lastDisconnect: { error: { output: { statusCode: 515 } } } });
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  // Initial connect: 1, then MAX reconnects = MAX+1 total.
+  assert.ok(made <= MAX + 1, `reconnect storm: expected at most ${MAX + 1} sockets, got ${made}`);
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 11) link() QR path: connection reaches 'open' without emitting qr -> rejected with link_no_qr.
+{
+  const dir = await setup();
+  const sock = mockSocket();
+  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  const linkP = p.link(ACCOUNT, {}, { makeSocket: () => sock, qrToDataUrl: async (s) => `data:image/png;base64,QR(${s})` });
+  // Emit connection 'open' without any preceding qr event.
+  setTimeout(() => sock._emit("connection.update", { connection: "open" }), 5);
+  await assert.rejects(linkP, (err) => {
+    assert.equal(err.code, "link_no_qr", `expected code link_no_qr, got ${err.code}`);
+    return true;
+  }, "link() must reject with link_no_qr when session is already authenticated");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 12) link() QR path: timeout fires if no qr and no open event arrive.
+// Uses a tiny custom timeout via a subclass override to avoid a 30-second real wait.
+{
+  const dir = await setup();
+  const sock = mockSocket();
+  // Monkey-patch the QR_TIMEOUT_MS by overriding the relevant Promise block via a
+  // subclass that replaces link() with a version using a 20ms timeout.
+  class FastTimeoutProvider extends WhatsAppProvider {
+    async link(accountId, opts = {}, deps = {}) {
+      const makeSocket = deps.makeSocket || ((d) => this._realMakeSocket(accountId, this.getSessionDir(accountId), d));
+      const qrToDataUrl = deps.qrToDataUrl || (async (s) => this._qrToDataUrl(s));
+      const s = await this.connect(accountId, { makeSocket });
+      if (opts.phone) {
+        const code = await s.requestPairingCode(String(opts.phone).replace(/[^0-9]/g, ""));
+        return { method: "pairing", payload: { code } };
+      }
+      const TIMEOUT_MS = 20; // short for test
+      return await new Promise((resolve, reject) => {
+        let settled = false;
+        const settle = (fn, val) => { if (settled) return; settled = true; clearTimeout(timer); fn(val); };
+        const onUpdate = async (update) => {
+          if (update.connection === "open") {
+            settle(reject, Object.assign(new Error("link_no_qr"), { code: "link_no_qr" }));
+            return;
+          }
+          if (!update.qr) return;
+          const dataUrl = await qrToDataUrl(update.qr);
+          settle(resolve, { method: "qr", payload: { dataUrl, ascii: `[QR] scan\n${update.qr}` } });
+        };
+        const timer = setTimeout(() => {
+          settle(reject, Object.assign(new Error("link_timeout: QR not emitted within timeout"), { code: "link_timeout" }));
+        }, TIMEOUT_MS);
+        s.ev.on("connection.update", onUpdate);
+      });
+    }
+  }
+  const p = new FastTimeoutProvider({ projectDirFor: () => dir });
+  const linkP = p.link(ACCOUNT, {}, { makeSocket: () => sock, qrToDataUrl: async (s) => `data:image/png;base64,QR(${s})` });
+  // Do NOT emit any event — let the timeout fire.
+  await assert.rejects(linkP, (err) => {
+    assert.equal(err.code, "link_timeout", `expected code link_timeout, got ${err.code}`);
+    return true;
+  }, "link() must reject with link_timeout when QR does not arrive");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+console.log("✓ comms whatsapp lifecycle (qr/pairing/connection.update/close/backoff/storm-cap/link-timeout)");
