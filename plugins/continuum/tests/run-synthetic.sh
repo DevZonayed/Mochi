@@ -723,6 +723,18 @@ import('$PLUGIN_DIR/lib/comms_dedupe.js').then((m) => {
   const r3 = m.reconcileImport(existing2, [ mk({ts:1717700001,source:'import'}) ]);
   eq(r3.added.length, 0, 'N<=M-no-new');
 
+  // Core ordinal guarantee: N>=2 new records (no existing) all get DISTINCT
+  // synthetic msgIds. Without the ordinal in the hash all three would collide.
+  const r4 = m.reconcileImport([], [
+    mk({ ts:1717700000, source:'import' }),
+    mk({ ts:1717700010, source:'import' }),
+    mk({ ts:1717700020, source:'import' }),
+  ]);
+  eq(r4.added.length, 3, 'three-new-same-minute-all-added');
+  const ids4 = r4.added.map(x => x.msgId);
+  const unique4 = new Set(ids4).size;
+  eq(unique4, 3, 'three-new-same-minute-all-distinct-msgIds');
+
   console.log(bad === 0 ? 'RECON OK' : 'RECON BAD ' + bad);
 });
 ")
