@@ -1017,6 +1017,222 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
 echo "$T43_OUT" | grep -qF "LIST OK" && ok "comms_store listChats allowlist-filtered" || { fail "comms_store listChats: $T43_OUT"; }
 rm -rf "$LC_REPO"
 
+# ============================================================================
+# Phase 2 (comms): comms_recall — scored, capped, allowlist-scoped retrieval
+# ============================================================================
+
+CR_REPO="$(mktemp -d -t continuum-synth-cr.XXXXXX)"
+mkdir -p "$CR_REPO/.continuum/comms"
+
+_CR_ALLOWED_GROUP="123-456@g.us"
+_CR_ALLOWED_DM="19999999999@s.whatsapp.net"
+_CR_DENIED="18880000000@s.whatsapp.net"
+cat > "$CR_REPO/.continuum/comms/config.json" <<EOF
+{
+  "version": 1,
+  "decided": true,
+  "declined": false,
+  "providers": {
+    "whatsapp": {
+      "accounts": {
+        "work": {
+          "capture": "session",
+          "mode": "strict",
+          "allowed_jids": ["$_CR_ALLOWED_GROUP", "$_CR_ALLOWED_DM"]
+        }
+      }
+    }
+  }
+}
+EOF
+
+_CR_STORE="$CR_REPO/.continuum/comms/store/whatsapp/work"
+_cr_seed() { # $1=chatId $2=msgId $3=ts $4=tsIso $5=senderName $6=senderId $7=text
+  local dir="$_CR_STORE/$1"
+  mkdir -p "$dir"
+  printf '{"provider":"whatsapp","accountId":"work","chatId":"%s","msgId":"%s","fingerprint":"fp:%s","fromMe":false,"senderId":"%s","senderName":"%s","ts":%s,"tsIso":"%s","kind":"text","text":"%s","media":null,"reply_to":null,"source":"live"}\n' \
+    "$1" "$2" "$2" "$6" "$5" "$3" "$4" "$7" >> "$dir/messages.jsonl"
+}
+
+_cr_seed "$_CR_ALLOWED_GROUP" "G1" 1717700000 "2026-06-06T18:13:20Z" "Alice" "$_CR_ALLOWED_DM" "lunch plans for friday"
+_cr_seed "$_CR_ALLOWED_GROUP" "G2" 1717700600 "2026-06-06T18:23:20Z" "Bob"   "$_CR_ALLOWED_DM" "we should deploy the deploy script after the deploy window"
+_cr_seed "$_CR_ALLOWED_GROUP" "G3" 1717800000 "2026-06-07T22:00:00Z" "Alice" "$_CR_ALLOWED_DM" "deploy is done"
+_cr_seed "$_CR_ALLOWED_DM"    "D1" 1717700100 "2026-06-06T18:15:00Z" "Carol" "$_CR_ALLOWED_DM" "migrating to postgres 16 next sprint"
+mkdir -p "$_CR_STORE/$_CR_DENIED"
+printf '{"provider":"whatsapp","accountId":"work","chatId":"%s","msgId":"X1","fingerprint":"fp:X1","fromMe":false,"senderId":"%s","senderName":"Mallory","ts":1717700200,"tsIso":"2026-06-06T18:16:40Z","kind":"text","text":"secret deploy in the denied chat","media":null,"reply_to":null,"source":"live"}\n' \
+  "$_CR_DENIED" "$_CR_DENIED" >> "$_CR_STORE/$_CR_DENIED/messages.jsonl"
+
+_CR_CALL() {
+  node -e "
+import('$PLUGIN_DIR/lib/comms_recall.js').then(({commsRecall}) => {
+  const opts = JSON.parse(process.argv[1]);
+  const r = commsRecall('$CR_REPO', opts);
+  console.log(JSON.stringify(r));
+}).catch((e) => { console.log('ERR:' + e.message); process.exit(1); });
+" "$1"
+}
+
+# ---- T44: comms_recall 'deploy' top hit is G2 (highest TF) ------------------
+echo
+echo "T44 — comms_recall 'deploy' ranks the multi-mention message first"
+_CR_R1=$(_CR_CALL '{"query":"deploy"}')
+_CR_TOPID=$(echo "$_CR_R1" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['hits'][0]['msgId'] if d['hits'] else 'none')")
+[ "$_CR_TOPID" = "G2" ] && ok "top hit msgId == G2" || { fail "expected G2 got $_CR_TOPID"; log "$_CR_R1"; }
+
+# ---- T45: §10 hit shape — chatId, tsIso, senderName, excerpt, msgId --------
+echo
+echo "T45 — each hit carries chatId, tsIso, senderName, excerpt, msgId (§10)"
+_CR_SHAPE=$(echo "$_CR_R1" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); h=d['hits'][0]
+need=['chatId','tsIso','senderName','excerpt','msgId']
+miss=[k for k in need if k not in h or h[k] in (None,'')]
+print('OK' if not miss else 'MISS:'+','.join(miss))
+")
+[ "$_CR_SHAPE" = "OK" ] && ok "hit shape complete per §10" || fail "hit shape: $_CR_SHAPE"
+
+# ---- T46: allowlist scope — denied chat never surfaces ----------------------
+echo
+echo "T46 — 'deploy' message in non-allowlisted chat never surfaces"
+_CR_DENIED_CHECK=$(echo "$_CR_R1" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print('FOUND' if any(h['chatId']=='$_CR_DENIED' or h['msgId']=='X1' for h in d['hits']) else 'CLEAN')
+")
+[ "$_CR_DENIED_CHECK" = "CLEAN" ] && ok "denied chat excluded from results" || fail "LEAK: denied chat surfaced"
+
+# ---- T47: default limit 10, hard max clamp 200 (§4.3) -----------------------
+echo
+echo "T47 — over-limit clamped to 200 and default limit is 10 (§4.3)"
+_CR_CLAMP=$(_CR_CALL '{"query":"deploy","limit":99999}' | python3 -c "import json,sys; print(json.load(sys.stdin)['limit'])")
+[ "$_CR_CLAMP" = "200" ] && ok "limit 99999 clamped to 200" || fail "expected clamp to 200 got $_CR_CLAMP"
+_CR_DEF=$(_CR_CALL '{"query":"deploy"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['limit'])")
+[ "$_CR_DEF" = "10" ] && ok "default limit is 10" || fail "expected default 10 got $_CR_DEF"
+
+# ---- T48: chatId filter scopes results to one chat --------------------------
+echo
+echo "T48 — chatId filter scopes results to that chat only"
+_CR_R5=$(_CR_CALL "{\"query\":\"postgres\",\"chatId\":\"$_CR_ALLOWED_DM\"}")
+_CR_PGID=$(echo "$_CR_R5" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['hits'][0]['msgId'] if d['hits'] else 'none')")
+_CR_PGN=$(echo "$_CR_R5" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$_CR_PGID" = "D1" ] && [ "$_CR_PGN" = "1" ] && ok "postgres → D1 in the DM only" || fail "expected D1/1 got $_CR_PGID/$_CR_PGN"
+
+# ---- T49: since/until window filters by ts ----------------------------------
+echo
+echo "T49 — since/until filter messages by epoch ts"
+_CR_R6=$(_CR_CALL '{"query":"deploy","since":1717750000}')
+_CR_N6=$(echo "$_CR_R6" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+_CR_TOP6=$(echo "$_CR_R6" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['hits'][0]['msgId'] if d['hits'] else 'none')")
+[ "$_CR_N6" = "1" ] && [ "$_CR_TOP6" = "G3" ] && ok "since filter keeps only G3" || fail "expected 1/G3 got $_CR_N6/$_CR_TOP6"
+_CR_R6B=$(_CR_CALL '{"query":"deploy","until":1717750000}')
+_CR_N6B=$(echo "$_CR_R6B" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+_CR_TOP6B=$(echo "$_CR_R6B" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['hits'][0]['msgId'] if d['hits'] else 'none')")
+_CR_UNTIL_HAS_G3=$(echo "$_CR_R6B" | python3 -c "import json,sys; print('YES' if any(h['msgId']=='G3' for h in json.load(sys.stdin)['hits']) else 'NO')")
+[ "$_CR_N6B" = "1" ] && [ "$_CR_TOP6B" = "G2" ] && [ "$_CR_UNTIL_HAS_G3" = "NO" ] && ok "until filter keeps G2, excludes G3" || fail "expected 1/G2/no-G3 got $_CR_N6B/$_CR_TOP6B/G3=$_CR_UNTIL_HAS_G3"
+
+# ---- T50: no-match query returns empty hits, no crash -----------------------
+echo
+echo "T50 — non-matching query returns hitCount 0"
+_CR_N7=$(_CR_CALL '{"query":"kubernetes"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$_CR_N7" = "0" ] && ok "no match → 0 hits, no error" || fail "expected 0 got $_CR_N7"
+
+# ---- T51: provider filter scopes to that provider only ----------------------
+echo
+echo "T51 — provider filter restricts to that provider"
+_CR_N8=$(_CR_CALL '{"query":"deploy","provider":"whatsapp"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$_CR_N8" -ge 1 ] && ok "provider=whatsapp returns hits (got $_CR_N8)" || fail "expected >=1 hits for provider=whatsapp got $_CR_N8"
+_CR_N8B=$(_CR_CALL '{"query":"deploy","provider":"telegram"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$_CR_N8B" = "0" ] && ok "provider=telegram (none) returns 0 hits" || fail "expected 0 hits for unknown provider got $_CR_N8B"
+
+# ---- T52: accountId filter scopes to that account only ----------------------
+echo
+echo "T52 — accountId filter restricts to that account"
+_CR_N9=$(_CR_CALL '{"query":"deploy","accountId":"work"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$_CR_N9" -ge 1 ] && ok "accountId=work returns hits (got $_CR_N9)" || fail "expected >=1 hits for accountId=work got $_CR_N9"
+_CR_N9B=$(_CR_CALL '{"query":"deploy","accountId":"personal"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$_CR_N9B" = "0" ] && ok "accountId=personal (none) returns 0 hits" || fail "expected 0 hits for unknown accountId got $_CR_N9B"
+
+# ---- T53: missing/empty query throws 'query required' -----------------------
+echo
+echo "T53 — missing or empty query throws 'query required'"
+_CR_ERR_EMPTY=$(node -e "
+import('$PLUGIN_DIR/lib/comms_recall.js').then(({commsRecall}) => {
+  try { commsRecall('$CR_REPO', { query: '' }); console.log('NO_THROW'); }
+  catch(e) { console.log(e.message.includes('query required') ? 'THREW_OK' : 'THREW_WRONG:' + e.message); }
+}).catch((e) => { console.log('ERR:' + e.message); process.exit(1); });
+")
+[ "$_CR_ERR_EMPTY" = "THREW_OK" ] && ok "empty query throws 'query required'" || fail "expected THREW_OK got $_CR_ERR_EMPTY"
+_CR_ERR_MISSING=$(node -e "
+import('$PLUGIN_DIR/lib/comms_recall.js').then(({commsRecall}) => {
+  try { commsRecall('$CR_REPO', {}); console.log('NO_THROW'); }
+  catch(e) { console.log(e.message.includes('query required') ? 'THREW_OK' : 'THREW_WRONG:' + e.message); }
+}).catch((e) => { console.log('ERR:' + e.message); process.exit(1); });
+")
+[ "$_CR_ERR_MISSING" = "THREW_OK" ] && ok "missing query throws 'query required'" || fail "expected THREW_OK got $_CR_ERR_MISSING"
+
+# ---- T54: duplicate/equivalent allowlist entries do not inflate hitCount ----
+echo
+echo "T54 — duplicate/equivalent allowlist entries don't inflate hitCount"
+_CR_DUP_REPO="$(mktemp -d -t continuum-synth-crd.XXXXXX)"
+mkdir -p "$_CR_DUP_REPO/.continuum/comms/store/whatsapp/work/$_CR_ALLOWED_DM"
+cat > "$_CR_DUP_REPO/.continuum/comms/config.json" <<DUPEOF
+{
+  "version": 1,
+  "decided": true,
+  "declined": false,
+  "providers": {
+    "whatsapp": {
+      "accounts": {
+        "work": {
+          "capture": "session",
+          "mode": "strict",
+          "allowed_jids": ["$_CR_ALLOWED_DM", "19999999999:12@s.whatsapp.net"]
+        }
+      }
+    }
+  }
+}
+DUPEOF
+printf '{"provider":"whatsapp","accountId":"work","chatId":"%s","msgId":"DUP1","fingerprint":"fp:DUP1","fromMe":false,"senderId":"%s","senderName":"Carol","ts":1717700100,"tsIso":"2026-06-06T18:15:00Z","kind":"text","text":"postgres migration","media":null,"reply_to":null,"source":"live"}\n' \
+  "$_CR_ALLOWED_DM" "$_CR_ALLOWED_DM" >> "$_CR_DUP_REPO/.continuum/comms/store/whatsapp/work/$_CR_ALLOWED_DM/messages.jsonl"
+_CR_HC11A=$(node -e "
+import('$PLUGIN_DIR/lib/comms_recall.js').then(({commsRecall}) => {
+  const r = commsRecall('$_CR_DUP_REPO', {query:'postgres'});
+  console.log(JSON.stringify(r));
+}).catch((e) => { console.log('ERR:' + e.message); process.exit(1); });
+" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$_CR_HC11A" = "1" ] && ok "device-suffix dup in allowlist: hitCount==1 (not inflated)" || fail "expected hitCount 1 got $_CR_HC11A (shard scanned twice)"
+_CR_DUP2_REPO="$(mktemp -d -t continuum-synth-crd2.XXXXXX)"
+mkdir -p "$_CR_DUP2_REPO/.continuum/comms/store/whatsapp/work/$_CR_ALLOWED_DM"
+cat > "$_CR_DUP2_REPO/.continuum/comms/config.json" <<DUP2EOF
+{
+  "version": 1,
+  "decided": true,
+  "declined": false,
+  "providers": {
+    "whatsapp": {
+      "accounts": {
+        "work": {
+          "capture": "session",
+          "mode": "strict",
+          "allowed_jids": ["$_CR_ALLOWED_DM", "$_CR_ALLOWED_DM"]
+        }
+      }
+    }
+  }
+}
+DUP2EOF
+printf '{"provider":"whatsapp","accountId":"work","chatId":"%s","msgId":"DUP2","fingerprint":"fp:DUP2","fromMe":false,"senderId":"%s","senderName":"Carol","ts":1717700100,"tsIso":"2026-06-06T18:15:00Z","kind":"text","text":"postgres migration","media":null,"reply_to":null,"source":"live"}\n' \
+  "$_CR_ALLOWED_DM" "$_CR_ALLOWED_DM" >> "$_CR_DUP2_REPO/.continuum/comms/store/whatsapp/work/$_CR_ALLOWED_DM/messages.jsonl"
+_CR_HC11B=$(node -e "
+import('$PLUGIN_DIR/lib/comms_recall.js').then(({commsRecall}) => {
+  const r = commsRecall('$_CR_DUP2_REPO', {query:'postgres'});
+  console.log(JSON.stringify(r));
+}).catch((e) => { console.log('ERR:' + e.message); process.exit(1); });
+" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$_CR_HC11B" = "1" ] && ok "verbatim-duplicate JID in allowlist: hitCount==1 (not inflated)" || fail "expected hitCount 1 got $_CR_HC11B (shard scanned twice)"
+rm -rf "$CR_REPO" "$_CR_DUP_REPO" "$_CR_DUP2_REPO"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
