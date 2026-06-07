@@ -140,8 +140,11 @@ export class WhatsAppProvider extends CommsProvider {
     const cfg = readConfig(projectDir);
     if (!isAllowed(cfg, "whatsapp", accountId, msg.chatId)) return; // drop before write
     msg.fingerprint = fingerprint(msg);
-    try { appendMessage(projectDir, msg); } catch (e) { this.logger.warn("append failed", String(e)); return; }
-    for (const cb of this.listeners) { try { cb(msg); } catch {} }
+    let r;
+    try { r = appendMessage(projectDir, msg); } catch (e) { this.logger.warn("append failed", String(e)); return; }
+    if (r.appended) {
+      for (const cb of this.listeners) { try { cb(msg); } catch {} }
+    }
   }
 
   _wireCapture(accountId, sock, projectDir) {

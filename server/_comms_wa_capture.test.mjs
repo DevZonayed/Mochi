@@ -176,4 +176,27 @@ async function setup() {
   await fs.rm(dir, { recursive: true, force: true });
 }
 
+// 6) onMessage callback fires exactly once across a duplicate re-delivery.
+//    A re-delivered duplicate msgId (same raw message emitted twice) must only
+//    trigger the onMessage listener once — the second emission is deduped by the
+//    store and the listener fan-out must be gated on appendMessage's {appended}
+//    return value (quality review fix, Task 16).
+{
+  const dir = await setup();
+  const sock = mockSocket();
+  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  await p.connect(ACCOUNT, { makeSocket: () => sock });
+
+  let callCount = 0;
+  p.onMessage(() => { callCount++; });
+
+  const m = waMsg({ id: "ONCE", text: "fire once" });
+  sock._emit("messages.upsert", { type: "notify", messages: [m] });
+  sock._emit("messages.upsert", { type: "notify", messages: [m] }); // duplicate re-delivery
+  await new Promise((r) => setTimeout(r, 15));
+
+  assert.equal(callCount, 1, "onMessage callback must fire exactly once even when a duplicate msgId is re-delivered");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
 console.log("✓ comms whatsapp capture pipeline (mock socket)");
