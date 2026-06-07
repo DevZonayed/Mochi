@@ -12,7 +12,7 @@ import { ProviderRegistry } from "./provider.js";
 import { WhatsAppProvider } from "./whatsapp.js";
 import { getSlice, listChats, readAllMessages, appendMessage } from "../../../plugins/continuum/lib/comms_store.js";
 import { readConfig, writeConfig } from "../../../plugins/continuum/lib/comms_config.js";
-import { normalizeJid } from "../../../plugins/continuum/lib/comms_allowlist.js";
+import { normalizeJid, isAllowed } from "../../../plugins/continuum/lib/comms_allowlist.js";
 import { commsRecall } from "../../../plugins/continuum/lib/comms_recall.js";
 import { parseWhatsAppExport } from "../../../plugins/continuum/lib/comms_import.js";
 import { reconcileImport } from "../../../plugins/continuum/lib/comms_dedupe.js";
@@ -133,6 +133,13 @@ export function buildServer({ registry, env = process.env } = {}) {
           // against the existing store by fingerprint (live/backfill win, §4.2),
           // then append-only persist exactly the NEW import records.
           const chatId = normalizeJid(args.chatId);
+          // §6.4 write-path guard: the store must never persist a non-allowlisted
+          // chat. The live-capture path enforces this in whatsapp.js (_capture);
+          // the import path is the parallel write path and MUST gate identically.
+          const cfg = readConfig(projectDir);
+          if (!isAllowed(cfg, args.provider, args.accountId, chatId)) {
+            return err(`comms_import_history: ${args.provider}/${args.accountId} chat not on allowlist: ${chatId || "(empty jid)"}`);
+          }
           const existing = readAllMessages(projectDir, args.provider, args.accountId, chatId);
           const parsed = parseWhatsAppExport(args.filePath, {
             provider: args.provider, accountId: args.accountId, chatId,

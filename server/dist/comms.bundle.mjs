@@ -6882,12 +6882,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs7, exportName) {
+    function addFormats(ajv, list, fs8, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs7[f]);
+        ajv.addFormat(f, fs8[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -111673,7 +111673,7 @@ var require_session_builder = __commonJS({
     var BaseKeyType = require_base_key_type();
     var ChainType = require_chain_type();
     var SessionRecord2 = require_session_record();
-    var crypto4 = require_crypto();
+    var crypto5 = require_crypto();
     var curve2 = require_curve();
     var errors = require_errors2();
     var queueJob2 = require_queue_job();
@@ -111794,7 +111794,7 @@ var require_session_builder = __commonJS({
           const a4 = curve2.calculateAgreement(theirEphemeralPubKey, ourEphemeralKey.privKey);
           sharedSecret.set(new Uint8Array(a4), 32 * 4);
         }
-        const masterKey = crypto4.deriveSecrets(
+        const masterKey = crypto5.deriveSecrets(
           Buffer.from(sharedSecret),
           Buffer.alloc(32),
           Buffer.from("WhisperText")
@@ -111823,7 +111823,7 @@ var require_session_builder = __commonJS({
       calculateSendingRatchet(session, remoteKey) {
         const ratchet = session.currentRatchet;
         const sharedSecret = curve2.calculateAgreement(remoteKey, ratchet.ephemeralKeyPair.privKey);
-        const masterKey = crypto4.deriveSecrets(sharedSecret, ratchet.rootKey, Buffer.from("WhisperRatchet"));
+        const masterKey = crypto5.deriveSecrets(sharedSecret, ratchet.rootKey, Buffer.from("WhisperRatchet"));
         session.addChain(ratchet.ephemeralKeyPair.pubKey, {
           messageKeys: {},
           chainKey: {
@@ -112423,7 +112423,7 @@ var require_session_cipher = __commonJS({
     var ProtocolAddress2 = require_protocol_address();
     var SessionBuilder2 = require_session_builder();
     var SessionRecord2 = require_session_record();
-    var crypto4 = require_crypto();
+    var crypto5 = require_crypto();
     var curve2 = require_curve();
     var errors = require_errors2();
     var protobufs = require_protobufs();
@@ -112490,7 +112490,7 @@ var require_session_cipher = __commonJS({
             throw new Error("Tried to encrypt on a receiving chain");
           }
           this.fillMessageKeys(chain, chain.chainKey.counter + 1);
-          const keys = crypto4.deriveSecrets(
+          const keys = crypto5.deriveSecrets(
             chain.messageKeys[chain.chainKey.counter],
             Buffer.alloc(32),
             Buffer.from("WhisperMessageKeys")
@@ -112500,14 +112500,14 @@ var require_session_cipher = __commonJS({
           msg.ephemeralKey = session.currentRatchet.ephemeralKeyPair.pubKey;
           msg.counter = chain.chainKey.counter;
           msg.previousCounter = session.currentRatchet.previousCounter;
-          msg.ciphertext = crypto4.encrypt(keys[0], data, keys[2].slice(0, 16));
+          msg.ciphertext = crypto5.encrypt(keys[0], data, keys[2].slice(0, 16));
           const msgBuf = protobufs.WhisperMessage.encode(msg).finish();
           const macInput = Buffer.alloc(msgBuf.byteLength + 33 * 2 + 1);
           macInput.set(ourIdentityKey.pubKey);
           macInput.set(session.indexInfo.remoteIdentityKey, 33);
           macInput[33 * 2] = this._encodeTupleByte(VERSION3, VERSION3);
           macInput.set(msgBuf, 33 * 2 + 1);
-          const mac2 = crypto4.calculateMAC(keys[1], macInput);
+          const mac2 = crypto5.calculateMAC(keys[1], macInput);
           const result = Buffer.alloc(msgBuf.byteLength + 9);
           result[0] = this._encodeTupleByte(VERSION3, VERSION3);
           result.set(msgBuf, 1);
@@ -112634,7 +112634,7 @@ var require_session_cipher = __commonJS({
         }
         const messageKey = chain.messageKeys[message.counter];
         delete chain.messageKeys[message.counter];
-        const keys = crypto4.deriveSecrets(
+        const keys = crypto5.deriveSecrets(
           messageKey,
           Buffer.alloc(32),
           Buffer.from("WhisperMessageKeys")
@@ -112645,8 +112645,8 @@ var require_session_cipher = __commonJS({
         macInput.set(ourIdentityKey.pubKey, 33);
         macInput[33 * 2] = this._encodeTupleByte(VERSION3, VERSION3);
         macInput.set(messageProto, 33 * 2 + 1);
-        crypto4.verifyMAC(macInput, keys[1], messageBuffer.slice(-8), 8);
-        const plaintext = crypto4.decrypt(keys[0], message.ciphertext, keys[2].slice(0, 16));
+        crypto5.verifyMAC(macInput, keys[1], messageBuffer.slice(-8), 8);
+        const plaintext = crypto5.decrypt(keys[0], message.ciphertext, keys[2].slice(0, 16));
         delete session.pendingPreKey;
         return plaintext;
       }
@@ -112661,8 +112661,8 @@ var require_session_cipher = __commonJS({
           throw new errors.SessionError("Chain closed");
         }
         const key = chain.chainKey.key;
-        chain.messageKeys[chain.chainKey.counter + 1] = crypto4.calculateMAC(key, Buffer.from([1]));
-        chain.chainKey.key = crypto4.calculateMAC(key, Buffer.from([2]));
+        chain.messageKeys[chain.chainKey.counter + 1] = crypto5.calculateMAC(key, Buffer.from([1]));
+        chain.chainKey.key = crypto5.calculateMAC(key, Buffer.from([2]));
         chain.chainKey.counter += 1;
         return this.fillMessageKeys(chain, counter);
       }
@@ -112689,7 +112689,7 @@ var require_session_cipher = __commonJS({
       calculateRatchet(session, remoteKey, sending) {
         let ratchet = session.currentRatchet;
         const sharedSecret = curve2.calculateAgreement(remoteKey, ratchet.ephemeralKeyPair.privKey);
-        const masterKey = crypto4.deriveSecrets(
+        const masterKey = crypto5.deriveSecrets(
           sharedSecret,
           ratchet.rootKey,
           Buffer.from("WhisperRatchet"),
@@ -125111,9 +125111,9 @@ var require_form_data = __commonJS({
     var http3 = __require("http");
     var https2 = __require("https");
     var parseUrl2 = __require("url").parse;
-    var fs7 = __require("fs");
+    var fs8 = __require("fs");
     var Stream = __require("stream").Stream;
-    var crypto4 = __require("crypto");
+    var crypto5 = __require("crypto");
     var mime = require_mime_types();
     var asynckit = require_asynckit();
     var setToStringTag = require_es_set_tostringtag();
@@ -125178,7 +125178,7 @@ var require_form_data = __commonJS({
         if (value.end != void 0 && value.end != Infinity && value.start != void 0) {
           callback(null, value.end + 1 - (value.start ? value.start : 0));
         } else {
-          fs7.stat(value.path, function(err2, stat2) {
+          fs8.stat(value.path, function(err2, stat2) {
             if (err2) {
               callback(err2);
               return;
@@ -125319,7 +125319,7 @@ var require_form_data = __commonJS({
       return Buffer.concat([dataBuffer, Buffer.from(this._lastBoundary())]);
     };
     FormData3.prototype._generateBoundary = function() {
-      this._boundary = "--------------------------" + crypto4.randomBytes(12).toString("hex");
+      this._boundary = "--------------------------" + crypto5.randomBytes(12).toString("hex");
     };
     FormData3.prototype.getLengthSync = function() {
       var knownLength = this._overheadLength + this._valueLength;
@@ -156746,7 +156746,7 @@ var require_atomic_sleep = __commonJS({
 var require_sonic_boom = __commonJS({
   "node_modules/sonic-boom/index.js"(exports, module) {
     "use strict";
-    var fs7 = __require("fs");
+    var fs8 = __require("fs");
     var EventEmitter5 = __require("events");
     var inherits2 = __require("util").inherits;
     var path4 = __require("path");
@@ -156803,20 +156803,20 @@ var require_sonic_boom = __commonJS({
       const mode = sonic.mode;
       if (sonic.sync) {
         try {
-          if (sonic.mkdir) fs7.mkdirSync(path4.dirname(file), { recursive: true });
-          const fd = fs7.openSync(file, flags, mode);
+          if (sonic.mkdir) fs8.mkdirSync(path4.dirname(file), { recursive: true });
+          const fd = fs8.openSync(file, flags, mode);
           fileOpened(null, fd);
         } catch (err2) {
           fileOpened(err2);
           throw err2;
         }
       } else if (sonic.mkdir) {
-        fs7.mkdir(path4.dirname(file), { recursive: true }, (err2) => {
+        fs8.mkdir(path4.dirname(file), { recursive: true }, (err2) => {
           if (err2) return fileOpened(err2);
-          fs7.open(file, flags, mode, fileOpened);
+          fs8.open(file, flags, mode, fileOpened);
         });
       } else {
-        fs7.open(file, flags, mode, fileOpened);
+        fs8.open(file, flags, mode, fileOpened);
       }
     }
     function SonicBoom(opts) {
@@ -156857,8 +156857,8 @@ var require_sonic_boom = __commonJS({
         this.flush = flushBuffer;
         this.flushSync = flushBufferSync;
         this._actualWrite = actualWriteBuffer;
-        fsWriteSync = () => fs7.writeSync(this.fd, this._writingBuf);
-        fsWrite = () => fs7.write(this.fd, this._writingBuf, this.release);
+        fsWriteSync = () => fs8.writeSync(this.fd, this._writingBuf);
+        fsWrite = () => fs8.write(this.fd, this._writingBuf, this.release);
       } else if (contentMode === void 0 || contentMode === kContentModeUtf8) {
         this._writingBuf = "";
         this.write = write2;
@@ -156867,15 +156867,15 @@ var require_sonic_boom = __commonJS({
         this._actualWrite = actualWrite;
         fsWriteSync = () => {
           if (Buffer.isBuffer(this._writingBuf)) {
-            return fs7.writeSync(this.fd, this._writingBuf);
+            return fs8.writeSync(this.fd, this._writingBuf);
           }
-          return fs7.writeSync(this.fd, this._writingBuf, "utf8");
+          return fs8.writeSync(this.fd, this._writingBuf, "utf8");
         };
         fsWrite = () => {
           if (Buffer.isBuffer(this._writingBuf)) {
-            return fs7.write(this.fd, this._writingBuf, this.release);
+            return fs8.write(this.fd, this._writingBuf, this.release);
           }
-          return fs7.write(this.fd, this._writingBuf, "utf8", this.release);
+          return fs8.write(this.fd, this._writingBuf, "utf8", this.release);
         };
       } else {
         throw new Error(`SonicBoom supports "${kContentModeUtf8}" and "${kContentModeBuffer}", but passed ${contentMode}`);
@@ -156932,7 +156932,7 @@ var require_sonic_boom = __commonJS({
           }
         }
         if (this._fsync) {
-          fs7.fsyncSync(this.fd);
+          fs8.fsyncSync(this.fd);
         }
         const len = this._len;
         if (this._reopening) {
@@ -157046,7 +157046,7 @@ var require_sonic_boom = __commonJS({
       const onDrain = () => {
         if (!this._fsync) {
           try {
-            fs7.fsync(this.fd, (err2) => {
+            fs8.fsync(this.fd, (err2) => {
               this._flushPending = false;
               cb(err2);
             });
@@ -157148,7 +157148,7 @@ var require_sonic_boom = __commonJS({
       const fd = this.fd;
       this.once("ready", () => {
         if (fd !== this.fd) {
-          fs7.close(fd, (err2) => {
+          fs8.close(fd, (err2) => {
             if (err2) {
               return this.emit("error", err2);
             }
@@ -157197,7 +157197,7 @@ var require_sonic_boom = __commonJS({
           buf = this._bufs[0];
         }
         try {
-          const n = Buffer.isBuffer(buf) ? fs7.writeSync(this.fd, buf) : fs7.writeSync(this.fd, buf, "utf8");
+          const n = Buffer.isBuffer(buf) ? fs8.writeSync(this.fd, buf) : fs8.writeSync(this.fd, buf, "utf8");
           const releasedBufObj = releaseWritingBuf(buf, this._len, n);
           buf = releasedBufObj.writingBuf;
           this._len = releasedBufObj.len;
@@ -157213,7 +157213,7 @@ var require_sonic_boom = __commonJS({
         }
       }
       try {
-        fs7.fsyncSync(this.fd);
+        fs8.fsyncSync(this.fd);
       } catch {
       }
     }
@@ -157234,7 +157234,7 @@ var require_sonic_boom = __commonJS({
           buf = mergeBuf(this._bufs[0], this._lens[0]);
         }
         try {
-          const n = fs7.writeSync(this.fd, buf);
+          const n = fs8.writeSync(this.fd, buf);
           buf = buf.subarray(n);
           this._len = Math.max(this._len - n, 0);
           if (buf.length <= 0) {
@@ -157262,13 +157262,13 @@ var require_sonic_boom = __commonJS({
       this._writingBuf = this._writingBuf.length ? this._writingBuf : this._bufs.shift() || "";
       if (this.sync) {
         try {
-          const written = Buffer.isBuffer(this._writingBuf) ? fs7.writeSync(this.fd, this._writingBuf) : fs7.writeSync(this.fd, this._writingBuf, "utf8");
+          const written = Buffer.isBuffer(this._writingBuf) ? fs8.writeSync(this.fd, this._writingBuf) : fs8.writeSync(this.fd, this._writingBuf, "utf8");
           release2(null, written);
         } catch (err2) {
           release2(err2);
         }
       } else {
-        fs7.write(this.fd, this._writingBuf, release2);
+        fs8.write(this.fd, this._writingBuf, release2);
       }
     }
     function actualWriteBuffer() {
@@ -157277,7 +157277,7 @@ var require_sonic_boom = __commonJS({
       this._writingBuf = this._writingBuf.length ? this._writingBuf : mergeBuf(this._bufs.shift(), this._lens.shift());
       if (this.sync) {
         try {
-          const written = fs7.writeSync(this.fd, this._writingBuf);
+          const written = fs8.writeSync(this.fd, this._writingBuf);
           release2(null, written);
         } catch (err2) {
           release2(err2);
@@ -157286,7 +157286,7 @@ var require_sonic_boom = __commonJS({
         if (kCopyBuffer) {
           this._writingBuf = Buffer.from(this._writingBuf);
         }
-        fs7.write(this.fd, this._writingBuf, release2);
+        fs8.write(this.fd, this._writingBuf, release2);
       }
     }
     function actualClose(sonic) {
@@ -157302,12 +157302,12 @@ var require_sonic_boom = __commonJS({
       sonic._lens = [];
       assert2(typeof sonic.fd === "number", `sonic.fd must be a number, got ${typeof sonic.fd}`);
       try {
-        fs7.fsync(sonic.fd, closeWrapped);
+        fs8.fsync(sonic.fd, closeWrapped);
       } catch {
       }
       function closeWrapped() {
         if (sonic.fd !== 1 && sonic.fd !== 2) {
-          fs7.close(sonic.fd, done);
+          fs8.close(sonic.fd, done);
         } else {
           done();
         }
@@ -189244,7 +189244,7 @@ var require_utils4 = __commonJS({
 // node_modules/qrcode/lib/renderer/png.js
 var require_png2 = __commonJS({
   "node_modules/qrcode/lib/renderer/png.js"(exports) {
-    var fs7 = __require("fs");
+    var fs8 = __require("fs");
     var PNG = require_png().PNG;
     var Utils = require_utils4();
     exports.render = function render(qrData, options) {
@@ -189296,7 +189296,7 @@ var require_png2 = __commonJS({
         called = true;
         cb.apply(null, args);
       };
-      const stream4 = fs7.createWriteStream(path4);
+      const stream4 = fs8.createWriteStream(path4);
       stream4.on("error", done);
       stream4.on("close", done);
       exports.renderToFileStream(stream4, qrData, options);
@@ -189363,9 +189363,9 @@ var require_utf82 = __commonJS({
         cb = options;
         options = void 0;
       }
-      const fs7 = __require("fs");
+      const fs8 = __require("fs");
       const utf8 = exports.render(qrData, options);
-      fs7.writeFile(path4, utf8, cb);
+      fs8.writeFile(path4, utf8, cb);
     };
   }
 });
@@ -189539,10 +189539,10 @@ var require_svg = __commonJS({
         cb = options;
         options = void 0;
       }
-      const fs7 = __require("fs");
+      const fs8 = __require("fs");
       const svgTag = exports.render(qrData, options);
       const xmlStr = '<?xml version="1.0" encoding="utf-8"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">' + svgTag;
-      fs7.writeFile(path4, xmlStr, cb);
+      fs8.writeFile(path4, xmlStr, cb);
     };
   }
 });
@@ -198614,6 +198614,36 @@ function fingerprint(msg) {
   const body = sha1(content);
   return "fp:" + sha1(`${msg.chatId || ""}|${minute}|${sender}|${body}`);
 }
+function reconcileImport(existingMsgs, importMsgs) {
+  const existing = Array.isArray(existingMsgs) ? existingMsgs : [];
+  const imports = Array.isArray(importMsgs) ? importMsgs : [];
+  const bucketKey = (msg) => {
+    const minute = Math.floor((Number(msg.ts) || 0) / 60);
+    const sender = normalizeJid(msg.senderId || "");
+    const content = msg.text && msg.text.length ? msg.text : msg.media && msg.media.mediaKey ? msg.media.mediaKey : "";
+    return `${msg.chatId || ""}|${minute}|${sender}|${content}`;
+  };
+  const capacity = /* @__PURE__ */ new Map();
+  for (const e of existing) {
+    const k = bucketKey(e);
+    capacity.set(k, (capacity.get(k) || 0) + 1);
+  }
+  const seenInBucket = /* @__PURE__ */ new Map();
+  const added = [];
+  for (const raw of imports) {
+    const k = bucketKey(raw);
+    const ordinal = seenInBucket.get(k) || 0;
+    seenInBucket.set(k, ordinal + 1);
+    const cap = capacity.get(k) || 0;
+    if (ordinal < cap) continue;
+    const sender = normalizeJid(raw.senderId || "");
+    const content = raw.text && raw.text.length ? raw.text : raw.media && raw.media.mediaKey ? raw.media.mediaKey : "";
+    const msgId = "import:" + sha1(`${raw.chatId || ""}|${raw.ts}|${ordinal}|${sender}|${content}`);
+    const rec = { ...raw, msgId, source: "import" };
+    added.push(rec);
+  }
+  return { merged: existing.concat(added), added };
+}
 
 // ../plugins/continuum/lib/comms_store.js
 var CURSOR_DEFAULT = { newestId: null, newestTs: 0, oldestId: null, oldestTs: 0, count: 0 };
@@ -199103,6 +199133,249 @@ ${update.qr}` } });
   }
 };
 
+// ../plugins/continuum/lib/scoring.js
+function stem(t) {
+  if (!t) return t;
+  t = t.toLowerCase();
+  if (t.length < 4) return t;
+  if (t.endsWith("ies") && t.length > 4) return t.slice(0, -3) + "y";
+  if (t.endsWith("ied") && t.length > 4) return t.slice(0, -3) + "y";
+  if (t.endsWith("ing") && t.length > 5) return t.slice(0, -3);
+  if (t.endsWith("ed") && t.length > 4) return t.slice(0, -2);
+  if (t.endsWith("es") && t.length > 4) return t.slice(0, -2);
+  if (t.endsWith("s") && t.length > 4 && !t.endsWith("ss") && !t.endsWith("us")) return t.slice(0, -1);
+  return t;
+}
+function tokenize(s) {
+  if (!s) return [];
+  return s.toLowerCase().split(/[^a-z0-9_+-]+/).filter((t) => t.length >= 2);
+}
+function tokenizeStemmed(s) {
+  return tokenize(s).map(stem);
+}
+function termFrequency(docStems, queryStems) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const q of queryStems) counts.set(q, 0);
+  for (const d of docStems) {
+    if (counts.has(d)) counts.set(d, counts.get(d) + 1);
+  }
+  return counts;
+}
+
+// ../plugins/continuum/lib/comms_recall.js
+var DEFAULT_LIMIT2 = 10;
+var HARD_MAX_LIMIT2 = 200;
+var EXCERPT_MAX = 200;
+function excerptOf(text) {
+  if (!text) return "";
+  const oneLine = String(text).replace(/\s+/g, " ").trim();
+  return oneLine.length > EXCERPT_MAX ? oneLine.slice(0, EXCERPT_MAX - 1) + "\u2026" : oneLine;
+}
+function allowedChats(cfg, { provider, accountId, chatId }) {
+  const out = [];
+  const normalizedChatId = chatId ? normalizeJid(chatId) : null;
+  const providers = cfg && cfg.providers || {};
+  for (const [prov, pv] of Object.entries(providers)) {
+    if (provider && prov !== provider) continue;
+    const accounts = pv && pv.accounts || {};
+    for (const [acc, av] of Object.entries(accounts)) {
+      if (accountId && acc !== accountId) continue;
+      const jids = Array.isArray(av && av.allowed_jids) ? av.allowed_jids : [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const jid of jids) {
+        const normJid = normalizeJid(jid);
+        if (!normJid) continue;
+        if (normalizedChatId && normJid !== normalizedChatId) continue;
+        if (!isAllowed(cfg, prov, acc, jid)) continue;
+        if (seen.has(normJid)) continue;
+        seen.add(normJid);
+        out.push({ provider: prov, accountId: acc, chatId: normJid });
+      }
+    }
+  }
+  return out;
+}
+function commsRecall(projectDir, opts = {}) {
+  if (!projectDir) throw new Error("commsRecall: projectDir required");
+  const { query, provider, accountId, chatId, since, until } = opts;
+  if (!query || !String(query).trim()) throw new Error("commsRecall: query required");
+  let limit = Number.isFinite(opts.limit) ? Math.floor(opts.limit) : DEFAULT_LIMIT2;
+  if (!Number.isFinite(limit) || limit <= 0) limit = DEFAULT_LIMIT2;
+  if (limit > HARD_MAX_LIMIT2) limit = HARD_MAX_LIMIT2;
+  const queryStems = tokenizeStemmed(query);
+  const cfg = readConfig(projectDir);
+  const targets = allowedChats(cfg, { provider, accountId, chatId });
+  const scored = [];
+  let totalScanned = 0;
+  for (const t of targets) {
+    const msgs = readAllMessages(projectDir, t.provider, t.accountId, t.chatId);
+    for (const m of msgs) {
+      if (since != null && Number(m.ts) < Number(since)) continue;
+      if (until != null && Number(m.ts) > Number(until)) continue;
+      totalScanned++;
+      const docStems = tokenizeStemmed(m.text || "");
+      if (docStems.length === 0) continue;
+      const tf = termFrequency(docStems, queryStems);
+      let score = 0;
+      const matched = [];
+      for (const qt of queryStems) {
+        const count = tf.get(qt) || 0;
+        if (count > 0) {
+          score += Math.log(1 + count);
+          matched.push(qt);
+        }
+      }
+      if (score === 0) continue;
+      scored.push({
+        provider: t.provider,
+        accountId: t.accountId,
+        chatId: m.chatId ?? t.chatId,
+        msgId: m.msgId,
+        tsIso: m.tsIso || null,
+        ts: Number(m.ts) || 0,
+        senderName: m.senderName || m.senderId || "",
+        excerpt: excerptOf(m.text),
+        score,
+        matchedKeywords: matched
+      });
+    }
+  }
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return b.ts - a.ts;
+  });
+  return {
+    query,
+    queryStems,
+    limit,
+    totalScanned,
+    hitCount: scored.length,
+    hits: scored.slice(0, limit)
+  };
+}
+
+// ../plugins/continuum/lib/comms_import.js
+import fs7 from "node:fs";
+import crypto4 from "node:crypto";
+function sha12(s) {
+  return crypto4.createHash("sha1").update(s).digest("hex");
+}
+var RE_BRACKET = /^[‎‏‪-‮﻿]*\[(\d{1,2}\/\d{1,2}\/\d{2,4}),\s+(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*([AaPp][Mm]))?\]\s+([\s\S]*)$/;
+var RE_DASH = /^[‎‏‪-‮﻿]*(\d{1,2}\/\d{1,2}\/\d{2,4}),\s+(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*([AaPp][Mm]))?\s+-\s+([\s\S]*)$/;
+function splitSender(rest) {
+  const idx = rest.indexOf(": ");
+  if (idx === -1) return { sender: null, body: rest };
+  return { sender: rest.slice(0, idx), body: rest.slice(idx + 2) };
+}
+function parseHeader(line) {
+  let m = RE_BRACKET.exec(line);
+  if (!m) m = RE_DASH.exec(line);
+  if (!m) return null;
+  const [, date3, time3, ampm, rest] = m;
+  return { date: date3, time: time3, ampm: ampm || null, rest };
+}
+function toEpochSeconds2(date3, time3, ampm) {
+  const [mo, da, yrRaw] = date3.split("/").map((n) => parseInt(n, 10));
+  let yr = yrRaw;
+  if (yr < 100) yr += 2e3;
+  const parts = time3.split(":").map((n) => parseInt(n, 10));
+  let hr = parts[0];
+  const min = parts[1] || 0;
+  const sec = parts.length > 2 ? parts[2] : 0;
+  if (ampm) {
+    const pm = /p/i.test(ampm);
+    if (pm && hr < 12) hr += 12;
+    if (!pm && hr === 12) hr = 0;
+  }
+  return Math.floor(Date.UTC(yr, mo - 1, da, hr, min, sec) / 1e3);
+}
+var MEDIA_MARKERS = [
+  { re: /<Media omitted>/i, kind: "image" },
+  // generic; exact kind is unknowable from text
+  { re: /\bimage omitted\b/i, kind: "image" },
+  { re: /\bvideo omitted\b/i, kind: "video" },
+  { re: /\baudio omitted\b/i, kind: "audio" },
+  { re: /\bsticker omitted\b/i, kind: "image" },
+  { re: /\bGIF omitted\b/i, kind: "video" },
+  { re: /\bdocument omitted\b/i, kind: "document" },
+  { re: /\bContact card omitted\b/i, kind: "system" },
+  { re: /[‎‏]*\S+\.\w+\s*\(file attached\)/i, kind: "document" }
+  // "IMG-001.jpg (file attached)"
+];
+function classifyBody(body) {
+  const trimmed = (body || "").trim();
+  for (const { re, kind } of MEDIA_MARKERS) {
+    if (re.test(trimmed)) {
+      const caption = trimmed.replace(re, "").trim();
+      return { kind, text: caption };
+    }
+  }
+  return { kind: "text", text: body };
+}
+function parseWhatsAppExport(filePath, { provider, accountId, chatId } = {}) {
+  const content = fs7.readFileSync(filePath, "utf8");
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  let cur = null;
+  let ordinal = 0;
+  const finalize2 = (msg) => {
+    if (!msg) return;
+    out.push(msg);
+  };
+  for (const line of lines) {
+    const header = parseHeader(line);
+    if (!header) {
+      if (cur) cur.text = cur.text ? `${cur.text}
+${line}` : line;
+      continue;
+    }
+    finalize2(cur);
+    cur = null;
+    const ts = toEpochSeconds2(header.date, header.time, header.ampm);
+    const { sender, body } = splitSender(header.rest);
+    let kind, text, senderId, senderName;
+    if (sender === null) {
+      kind = "system";
+      text = body;
+      senderId = null;
+      senderName = null;
+    } else {
+      const c = classifyBody(body);
+      kind = c.kind;
+      text = c.text;
+      senderName = sender;
+      senderId = sender;
+    }
+    const tsIso = new Date(ts * 1e3).toISOString();
+    const o2 = {
+      provider,
+      accountId,
+      chatId,
+      msgId: null,
+      // canonical id minted by reconcileImport
+      fingerprint: null,
+      // filled below
+      fromMe: false,
+      senderId,
+      senderName,
+      ts,
+      tsIso,
+      kind,
+      text,
+      media: null,
+      // bytes are not present in a text export
+      reply_to: null,
+      source: "import"
+    };
+    o2.msgId = "import:" + sha12(`${chatId || ""}|${ts}|${ordinal}|${senderId || ""}|${text || ""}`);
+    o2.fingerprint = fingerprint(o2);
+    ordinal += 1;
+    cur = o2;
+  }
+  finalize2(cur);
+  return out;
+}
+
 // src/comms/index.js
 var log = (...a) => process.stderr.write(a.map(String).join(" ") + "\n");
 var PROJ = { type: "string", description: "Project root containing .continuum/. Defaults to COMMS_PROJECT_DIR env." };
@@ -199248,9 +199521,33 @@ function buildServer({ registry: registry2, env = process.env } = {}) {
           await p.connect?.(args.accountId, {});
           return ok({ status: p.status(args.accountId) });
         }
-        case "comms_recall":
-        case "comms_import_history":
-          return err(`${name} not wired in this phase`);
+        case "comms_recall": {
+          return ok(commsRecall(projectDir, {
+            query: args.query,
+            provider: args.provider,
+            accountId: args.accountId,
+            chatId: args.chatId,
+            since: args.since,
+            until: args.until,
+            limit: args.limit
+          }));
+        }
+        case "comms_import_history": {
+          const chatId = normalizeJid(args.chatId);
+          const cfg = readConfig(projectDir);
+          if (!isAllowed(cfg, args.provider, args.accountId, chatId)) {
+            return err(`comms_import_history: ${args.provider}/${args.accountId} chat not on allowlist: ${chatId || "(empty jid)"}`);
+          }
+          const existing = readAllMessages(projectDir, args.provider, args.accountId, chatId);
+          const parsed = parseWhatsAppExport(args.filePath, {
+            provider: args.provider,
+            accountId: args.accountId,
+            chatId
+          });
+          const { merged, added } = reconcileImport(existing, parsed);
+          for (const m of added) appendMessage(projectDir, m);
+          return ok({ added: added.length, total: merged.length });
+        }
         default:
           return err(`unknown tool: ${name}`);
       }

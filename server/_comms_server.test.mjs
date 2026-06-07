@@ -263,4 +263,70 @@ const TOOLS = [
   await fs.rm(dir, { recursive: true, force: true });
 }
 
+// 8b) comms_import_history WRITE-PATH ALLOWLIST GUARD (§6.4 structural invariant).
+//    Importing into a chat that is NOT on the account's allowlist must persist
+//    NOTHING — the store never holds a non-allowlisted chat. The live-capture
+//    path enforces this (whatsapp.js _capture drops before write); the import
+//    path is the parallel write path and must gate identically. Without this
+//    test the invariant has zero regression protection on the import path.
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "comms-srv-import-deny-"));
+  const provider = "whatsapp";
+  const accountId = "work";
+  const allowedChat = "12345@s.whatsapp.net";
+  const deniedChat = "99999@s.whatsapp.net"; // deliberately NOT in allowed_jids
+
+  await writeConfig(dir, {
+    version: 1, decided: true, declined: false,
+    providers: { [provider]: { accounts: { [accountId]: {
+      capture: "session", mode: "strict", allowed_jids: [allowedChat],
+    } } } },
+  });
+
+  // A valid export that WOULD parse to records if the guard weren't there.
+  const exportTxt = [
+    "[6/6/24, 6:13:20 PM] Alice: secret message that must never persist",
+    "[6/6/24, 6:14:00 PM] Bob: nor this one",
+  ].join("\n");
+  const fixture = path.join(dir, "export.txt");
+  await fs.writeFile(fixture, exportTxt);
+
+  const reg = new ProviderRegistry();
+  const srv = buildServer({ registry: reg, env: {} });
+
+  // Import targeting the NON-allowlisted chat must be rejected and write nothing.
+  const r = await srv.handleToolCall({
+    name: "comms_import_history",
+    arguments: { provider, accountId, chatId: deniedChat, filePath: fixture, project_dir: dir },
+  });
+  // Either an isError result OR a non-error {added:0}; both are acceptable per
+  // §6.4 ("never persists"), but the records must NOT land.
+  if (!r.isError) {
+    const out = JSON.parse(r.content[0].text);
+    assert.equal(out.added, 0, "non-allowlisted import must add nothing");
+  } else {
+    assert.ok(r.isError === true, "non-allowlisted import returns an error result");
+  }
+
+  // Readback of the denied chat through getSlice must be EMPTY — proves nothing
+  // was persisted to the store under the non-allowlisted chatId.
+  const rs = await srv.handleToolCall({
+    name: "comms_get_messages",
+    arguments: { provider, accountId, chatId: deniedChat, limit: 50, project_dir: dir },
+  });
+  const slice = JSON.parse(rs.content[0].text);
+  assert.equal(slice.messages.length, 0, "denied chat must hold zero stored messages");
+
+  // Sanity: the ALLOWLISTED chat still imports normally (guard isn't over-broad).
+  const rOk = await srv.handleToolCall({
+    name: "comms_import_history",
+    arguments: { provider, accountId, chatId: allowedChat, filePath: fixture, project_dir: dir },
+  });
+  assert.equal(rOk.isError, false, `allowlisted import returned error: ${rOk.content[0].text}`);
+  const outOk = JSON.parse(rOk.content[0].text);
+  assert.ok(outOk.added > 0, "allowlisted import still adds records");
+
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
 console.log("✓ comms MCP server tool layer + projectDir resolution");
