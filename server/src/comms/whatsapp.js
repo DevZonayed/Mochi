@@ -125,6 +125,7 @@ export class WhatsAppProvider extends CommsProvider {
     this.statuses.set(accountId, "connected");
     this._wireCapture(accountId, sock, projectDir);
     this._wireHistory(accountId, sock, projectDir);
+    this._wireConnection(accountId, sock, projectDir, factory);
     return sock;
   }
 
@@ -161,6 +162,84 @@ export class WhatsAppProvider extends CommsProvider {
     });
   }
 
+  // ---- lifecycle: connection.update routing + close-reason reconnect ----------
+
+  // DisconnectReason numeric codes baileys uses (avoids importing the enum):
+  // loggedOut=401, restartRequired=515, connectionClosed=428, connectionLost=408,
+  // timedOut=408, badSession=500, connectionReplaced=440.
+  _statusCode(update) {
+    return update?.lastDisconnect?.error?.output?.statusCode
+      ?? update?.lastDisconnect?.error?.output?.payload?.statusCode
+      ?? null;
+  }
+
+  _wireConnection(accountId, sock, projectDir, makeSocket) {
+    sock.ev.on("connection.update", async (update) => {
+      if (update.connection === "open") {
+        this.statuses.set(accountId, "connected");
+        if (sock.user) { this._self = sock.user.id; }
+        return;
+      }
+      if (update.connection === "close") {
+        const code = this._statusCode(update);
+        if (code === 401) {
+          // loggedOut: wipe auth, surface re-login, DO NOT reconnect.
+          this.statuses.set(accountId, "logged_out");
+          try { await this._wipeAuth(accountId); } catch {}
+          return;
+        }
+        // restartRequired(515) / connectionClosed(428) / others: recreate socket.
+        this.statuses.set(accountId, "needs_login");
+        try {
+          await this.connect(accountId, { makeSocket }); // a socket is single-use after close
+        } catch (e) { this.logger.warn("reconnect failed", String(e)); }
+      }
+    });
+  }
+
+  async _wipeAuth(accountId) {
+    const dir = this.getSessionDir(accountId);
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+
+  // link: open a socket (if needed) and resolve to QR or pairing code.
+  // opts: { phone? }. deps: { makeSocket?, qrToDataUrl? } (injectable for tests).
+  async link(accountId, opts = {}, deps = {}) {
+    const projectDir = this.projectDirFor(accountId);
+    const makeSocket = deps.makeSocket || ((d) => this._realMakeSocket(accountId, this.getSessionDir(accountId), d));
+    const qrToDataUrl = deps.qrToDataUrl || (async (s) => this._qrToDataUrl(s));
+    const sock = await this.connect(accountId, { makeSocket });
+    this._wireConnection(accountId, sock, projectDir, makeSocket);
+
+    // Pairing path: request ONCE, never loop (429 guard).
+    if (opts.phone) {
+      const code = await sock.requestPairingCode(String(opts.phone).replace(/[^0-9]/g, ""));
+      return { method: "pairing", payload: { code } };
+    }
+
+    // QR path: resolve on the first qr from connection.update; guard re-emits.
+    return await new Promise((resolve) => {
+      let resolved = false;
+      const onUpdate = async (update) => {
+        if (resolved || !update.qr) return;
+        resolved = true;
+        const dataUrl = await qrToDataUrl(update.qr);
+        resolve({ method: "qr", payload: { dataUrl, ascii: `[QR] scan in WhatsApp > Linked Devices\n${update.qr}` } });
+      };
+      sock.ev.on("connection.update", onUpdate);
+    });
+  }
+
+  // Lazy qrcode import (build phase adds the dep). Falls back to a data-URL stub.
+  async _qrToDataUrl(qr) {
+    try {
+      const qrcode = (await import("qrcode")).default || (await import("qrcode"));
+      return await qrcode.toDataURL(qr);
+    } catch {
+      return `data:text/plain;base64,${Buffer.from(qr).toString("base64")}`;
+    }
+  }
+
   // Real baileys socket builder — lazily imported so tests never load baileys.
   async _realMakeSocket(accountId, authDir, _deps) {
     const baileys = await import("@whiskeysockets/baileys");
@@ -174,6 +253,8 @@ export class WhatsAppProvider extends CommsProvider {
       logger: this.logger,
       printQRInTerminal: false,
       syncFullHistory: false,
+      // §5.2 trap: ALWAYS pass an explicit callback; syncFullHistory:false alone
+      // silently kills history sync and can break live routing.
       shouldSyncHistoryMessage: () => true,
       getMessage: async (key) => this._getMessageFromStore(accountId, key),
     });
