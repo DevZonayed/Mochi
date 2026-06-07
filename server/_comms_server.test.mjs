@@ -192,4 +192,75 @@ const TOOLS = [
   await fs.rm(dir, { recursive: true, force: true });
 }
 
+// 8) comms_import_history: end-to-end through the server tool handler. Parses a
+//    real WhatsApp "Export chat" .txt fixture into the store under an allowlisted
+//    chat, asserting added>0 on the first run and added===0 on the second
+//    (idempotent re-import — Req 7 history gap-fill). NOT the stub error.
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "comms-srv-import-"));
+  const provider = "whatsapp";
+  const accountId = "work";
+  const chatId = "12345@s.whatsapp.net";
+
+  await writeConfig(dir, {
+    version: 1, decided: true, declined: false,
+    providers: { [provider]: { accounts: { [accountId]: {
+      capture: "session", mode: "strict", allowed_jids: [chatId],
+    } } } },
+  });
+
+  // A small but representative export: basic line, multi-line continuation,
+  // a <Media omitted> line, a system/notice line, and two same-minute lines
+  // (the intra-minute ordinal path).
+  const exportTxt = [
+    "[6/6/24, 6:13:20 PM] Alice: let's discuss the budget tomorrow",
+    "and bring the latest numbers",
+    "[6/6/24, 6:14:00 PM] Bob: <Media omitted>",
+    "[6/6/24, 6:15:00 PM] Messages and calls are end-to-end encrypted.",
+    "6/6/24, 18:16 - Carol: dash format also parses",
+    "[6/6/24, 6:18:00 PM] Dave: ok",
+    "[6/6/24, 6:18:30 PM] Dave: ok",
+  ].join("\n");
+  const fixture = path.join(dir, "export.txt");
+  await fs.writeFile(fixture, exportTxt);
+
+  const reg = new ProviderRegistry();
+  const srv = buildServer({ registry: reg, env: {} });
+
+  const r1 = await srv.handleToolCall({
+    name: "comms_import_history",
+    arguments: { provider, accountId, chatId, filePath: fixture, project_dir: dir },
+  });
+  assert.equal(r1.isError, false, `comms_import_history returned error: ${r1.content[0].text}`);
+  assert.ok(!String(r1.content[0].text).includes("not wired"), "must not return the stub error");
+  const out1 = JSON.parse(r1.content[0].text);
+  assert.ok(out1.added > 0, `first import must add records, got added=${out1.added}`);
+  assert.equal(out1.added, 6, "all 6 distinct import messages added on first run");
+  assert.equal(out1.total, 6, "total reflects the reconciled set");
+
+  // Second import of the same export must add nothing (idempotent re-import).
+  const r2 = await srv.handleToolCall({
+    name: "comms_import_history",
+    arguments: { provider, accountId, chatId, filePath: fixture, project_dir: dir },
+  });
+  assert.equal(r2.isError, false, `re-import returned error: ${r2.content[0].text}`);
+  const out2 = JSON.parse(r2.content[0].text);
+  assert.equal(out2.added, 0, "idempotent re-import adds nothing new");
+
+  // Readback through getSlice proves the import records actually landed in the
+  // store under the allowlisted chat and carry source:"import".
+  const rs = await srv.handleToolCall({
+    name: "comms_get_messages",
+    arguments: { provider, accountId, chatId, limit: 50, project_dir: dir },
+  });
+  const slice = JSON.parse(rs.content[0].text);
+  assert.equal(slice.messages.length, 6, "store holds the 6 imported messages");
+  assert.ok(slice.messages.every((m) => m.source === "import"), "every stored record is an import");
+  // Continuation folded into the first message's text.
+  const folded = slice.messages.find((m) => m.text && m.text.includes("bring the latest numbers"));
+  assert.ok(folded && folded.text.includes("budget"), "multi-line continuation folded into one message");
+
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
 console.log("✓ comms MCP server tool layer + projectDir resolution");

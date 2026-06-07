@@ -1017,6 +1017,86 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
 echo "$T43_OUT" | grep -qF "LIST OK" && ok "comms_store listChats allowlist-filtered" || { fail "comms_store listChats: $T43_OUT"; }
 rm -rf "$LC_REPO"
 
+# ---- T43b: comms_import parseWhatsAppExport — formats, continuation, system, --
+#            media, intra-minute ordinal, idempotent re-import (Req 7) ----------
+echo
+echo "T43b — comms_import parseWhatsAppExport + reconcile (Req 7 gap-fill)"
+IMP_REPO="$(mktemp -d -t continuum-synth-imp.XXXXXX)"
+T43B_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/comms_import.js').then((m) => {
+  import('$PLUGIN_DIR/lib/comms_dedupe.js').then((D) => {
+    const fs = require('node:fs'); const path = require('node:path');
+    const d = '$IMP_REPO';
+    let bad = 0;
+    const eq = (a,b,label) => { if (JSON.stringify(a)!==JSON.stringify(b)) { console.log('FAIL',label,'got',JSON.stringify(a),'want',JSON.stringify(b)); bad++; } };
+
+    // Fixture covers: a basic bracketed message, a multi-line continuation, a
+    // <Media omitted> line, a system/notice line, the dash format variant, and
+    // two same-minute lines (intra-minute ordinal path).
+    const lines = [
+      '[6/6/24, 6:13:20 PM] Alice: lets discuss the budget tomorrow',
+      'and bring the latest numbers',
+      '[6/6/24, 6:14:00 PM] Bob: <Media omitted>',
+      '[6/6/24, 6:15:00 PM] Messages and calls are end-to-end encrypted.',
+      '6/6/24, 18:16 - Carol: dash format also parses',
+      '[6/6/24, 6:18:00 PM] Dave: ok',
+      '[6/6/24, 6:18:30 PM] Dave: ok',
+    ];
+    const f = path.join(d, 'export.txt');
+    fs.writeFileSync(f, lines.join('\n'));
+
+    const msgs = m.parseWhatsAppExport(f, { provider:'whatsapp', accountId:'work', chatId:'c@g.us' });
+    eq(msgs.length, 6, 'six-logical-messages');
+
+    // §4.1 import contract: every record is source:import, fromMe:false, media:null, reply_to:null
+    eq(msgs.every(x => x.source === 'import'), true, 'all-source-import');
+    eq(msgs.every(x => x.fromMe === false), true, 'all-fromMe-false');
+    eq(msgs.every(x => x.media === null), true, 'all-media-null');
+    eq(msgs.every(x => x.reply_to === null), true, 'all-reply_to-null');
+    eq(msgs.every(x => x.provider === 'whatsapp' && x.accountId === 'work' && x.chatId === 'c@g.us'), true, 'identity-fields-set');
+
+    // Multi-line continuation folds into the FIRST message's text.
+    eq(msgs[0].text, 'lets discuss the budget tomorrow\nand bring the latest numbers', 'continuation-folded');
+    eq(msgs[0].kind, 'text', 'first-is-text');
+    eq(msgs[0].senderName, 'Alice', 'first-sender-name');
+
+    // <Media omitted> -> media kind, empty caption, media null.
+    eq(msgs[1].kind, 'image', 'media-omitted-kind');
+    eq(msgs[1].text, '', 'media-omitted-no-caption');
+
+    // System/notice line: timestamp but no 'Sender:' -> kind system, null sender.
+    const sys = msgs.find(x => x.kind === 'system');
+    eq(!!sys, true, 'system-line-present');
+    eq(sys.senderId, null, 'system-senderId-null');
+    eq(sys.senderName, null, 'system-senderName-null');
+    eq(sys.text.includes('end-to-end'), true, 'system-text-preserved');
+
+    // Dash-format variant parses with the right sender + body.
+    const carol = msgs.find(x => x.senderName === 'Carol');
+    eq(!!carol, true, 'dash-format-parsed');
+    eq(carol.text, 'dash format also parses', 'dash-format-body');
+
+    // Two same-minute 'ok' lines: both land in the same fp minute. reconcile mints
+    // DISTINCT synthetic msgIds via the ordinal.
+    const rec = D.reconcileImport([], msgs);
+    eq(rec.added.length, 6, 'reconcile-adds-all-six');
+    const okIds = rec.added.filter(x => x.text === 'ok').map(x => x.msgId);
+    eq(okIds.length, 2, 'two-ok-records');
+    eq(new Set(okIds).size, 2, 'two-ok-records-distinct-msgIds');
+    eq(rec.added.every(x => /^import:[0-9a-f]{40}$/.test(x.msgId)), true, 'synthetic-msgId-shape');
+
+    // Idempotent re-import: parse + reconcile the SAME export again -> 0 new.
+    const msgs2 = m.parseWhatsAppExport(f, { provider:'whatsapp', accountId:'work', chatId:'c@g.us' });
+    const rec2 = D.reconcileImport(rec.merged, msgs2);
+    eq(rec2.added.length, 0, 'idempotent-reimport-no-new');
+
+    console.log(bad === 0 ? 'IMPORT OK' : 'IMPORT BAD ' + bad);
+  });
+});
+")
+echo "$T43B_OUT" | grep -qF "IMPORT OK" && ok "comms_import parseWhatsAppExport + reconcile idempotent" || { fail "comms_import: $T43B_OUT"; }
+rm -rf "$IMP_REPO"
+
 # ============================================================================
 # Phase 2 (comms): comms_recall — scored, capped, allowlist-scoped retrieval
 # ============================================================================

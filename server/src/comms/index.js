@@ -10,10 +10,12 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 import { ProviderRegistry } from "./provider.js";
 import { WhatsAppProvider } from "./whatsapp.js";
-import { getSlice, listChats } from "../../../plugins/continuum/lib/comms_store.js";
+import { getSlice, listChats, readAllMessages, appendMessage } from "../../../plugins/continuum/lib/comms_store.js";
 import { readConfig, writeConfig } from "../../../plugins/continuum/lib/comms_config.js";
 import { normalizeJid } from "../../../plugins/continuum/lib/comms_allowlist.js";
 import { commsRecall } from "../../../plugins/continuum/lib/comms_recall.js";
+import { parseWhatsAppExport } from "../../../plugins/continuum/lib/comms_import.js";
+import { reconcileImport } from "../../../plugins/continuum/lib/comms_dedupe.js";
 
 const log = (...a) => process.stderr.write(a.map(String).join(" ") + "\n");
 
@@ -126,9 +128,19 @@ export function buildServer({ registry, env = process.env } = {}) {
             chatId: args.chatId, since: args.since, until: args.until, limit: args.limit,
           }));
         }
-        case "comms_import_history":
-          // Wired to the comms importer lib in its own phase task.
-          return err(`${name} not wired in this phase`);
+        case "comms_import_history": {
+          // Parse the WhatsApp "Export chat" .txt -> normalized Msg[], reconcile
+          // against the existing store by fingerprint (live/backfill win, §4.2),
+          // then append-only persist exactly the NEW import records.
+          const chatId = normalizeJid(args.chatId);
+          const existing = readAllMessages(projectDir, args.provider, args.accountId, chatId);
+          const parsed = parseWhatsAppExport(args.filePath, {
+            provider: args.provider, accountId: args.accountId, chatId,
+          });
+          const { merged, added } = reconcileImport(existing, parsed);
+          for (const m of added) appendMessage(projectDir, m);
+          return ok({ added: added.length, total: merged.length });
+        }
         default:
           // Should not reach here since unknown tools are caught above.
           return err(`unknown tool: ${name}`);
