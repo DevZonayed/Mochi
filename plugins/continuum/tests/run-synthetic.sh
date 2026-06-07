@@ -500,6 +500,36 @@ STALE2=$(echo "$STJSON" | python3 -c "import json,sys; d=json.load(sys.stdin); h
 [ "$STALE2" = "False" ] && ok "fresh link not flagged stale" || fail "fresh link wrongly flagged stale (got $STALE2)"
 rm -rf "$STREPO"
 
+# ============================================================================
+# Phase 1 (comms): pure-JS data layer — paths, config, allowlist, dedupe, store
+# ============================================================================
+
+# ---- T35: comms path helpers resolve under .continuum/comms ----------------
+echo
+echo "T35 — comms path helpers"
+T35_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/paths.js').then((m) => {
+  const d = '/tmp/proj';
+  const checks = [
+    [m.commsDir(d), '/tmp/proj/.continuum/comms'],
+    [m.commsConfigPath(d), '/tmp/proj/.continuum/comms/config.json'],
+    [m.commsLocalConfigPath(d), '/tmp/proj/.continuum/comms/config.local.json'],
+    [m.commsStatePath(d), '/tmp/proj/.continuum/comms/state.json'],
+    [m.commsSeenPath(d), '/tmp/proj/.continuum/comms/.last-session-seen.json'],
+    [m.commsIndexPath(d), '/tmp/proj/.continuum/comms/index.jsonl'],
+    [m.commsAuthDir(d,'whatsapp','work'), '/tmp/proj/.continuum/comms/whatsapp/work/auth'],
+    [m.commsChatDir(d,'whatsapp','work','c@g.us'), '/tmp/proj/.continuum/comms/store/whatsapp/work/c@g.us'],
+    [m.commsMessagesPath(d,'whatsapp','work','c@g.us'), '/tmp/proj/.continuum/comms/store/whatsapp/work/c@g.us/messages.jsonl'],
+    [m.commsCursorPath(d,'whatsapp','work','c@g.us'), '/tmp/proj/.continuum/comms/store/whatsapp/work/c@g.us/cursor.json'],
+    [m.commsMetaPath(d,'whatsapp','work','c@g.us'), '/tmp/proj/.continuum/comms/store/whatsapp/work/c@g.us/meta.json'],
+  ];
+  let bad = 0;
+  for (const [got, want] of checks) { if (got !== want) { console.log('PATH FAIL got', got, 'want', want); bad++; } }
+  console.log(bad === 0 ? 'PATHS OK' : 'PATHS BAD ' + bad);
+});
+")
+echo "$T35_OUT" | grep -qF "PATHS OK" && ok "comms path helpers resolve correctly" || { fail "comms paths: $T35_OUT"; }
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
