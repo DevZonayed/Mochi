@@ -740,6 +740,36 @@ import('$PLUGIN_DIR/lib/comms_dedupe.js').then((m) => {
 ")
 echo "$T39_OUT" | grep -qF "RECON OK" && ok "comms_dedupe reconcileImport greedy 1:1 + ordinal" || { fail "comms_dedupe reconcile: $T39_OUT"; }
 
+# ---- T40: comms_store readCursor/writeCursor (atomic, default shape) -------
+echo
+echo "T40 — comms_store cursor read/write"
+CUR_REPO="$(mktemp -d -t continuum-synth-cur.XXXXXX)"
+T40_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
+  import('$PLUGIN_DIR/lib/paths.js').then((P) => {
+    const fs = require('node:fs');
+    const d = '$CUR_REPO';
+    let bad = 0;
+    const eq = (a,b,label) => { if (JSON.stringify(a)!==JSON.stringify(b)) { console.log('FAIL',label,'got',JSON.stringify(a),'want',JSON.stringify(b)); bad++; } };
+
+    // absent cursor -> zeroed default shape, never throws
+    const def = m.readCursor(d,'whatsapp','work','c@g.us');
+    eq(def, {newestId:null,newestTs:0,oldestId:null,oldestTs:0,count:0}, 'cursor-default');
+
+    // write + round-trip; tmp file is cleaned up (atomic rename)
+    const cur = {newestId:'B',newestTs:200,oldestId:'A',oldestTs:100,count:2};
+    m.writeCursor(d,'whatsapp','work','c@g.us', cur);
+    eq(m.readCursor(d,'whatsapp','work','c@g.us'), cur, 'cursor-roundtrip');
+    const dir = P.commsChatDir(d,'whatsapp','work','c@g.us');
+    eq(fs.readdirSync(dir).filter(f=>f.includes('.tmp')), [], 'no-tmp-leftover');
+
+    console.log(bad === 0 ? 'CUR OK' : 'CUR BAD ' + bad);
+  });
+});
+")
+echo "$T40_OUT" | grep -qF "CUR OK" && ok "comms_store cursor read/write" || { fail "comms_store cursor: $T40_OUT"; }
+rm -rf "$CUR_REPO"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
