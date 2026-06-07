@@ -95,13 +95,17 @@ async function ensureJidNormalizer() {
 }
 
 export class WhatsAppProvider extends CommsProvider {
-  constructor({ projectDirFor } = {}) {
+  // reconnectBaseMs: injectable so tests can use 0 to skip real delays.
+  constructor({ projectDirFor, reconnectBaseMs } = {}) {
     super("whatsapp");
     this.projectDirFor = projectDirFor || (() => process.cwd());
-    this.sockets = new Map();      // accountId -> socket
-    this.statuses = new Map();     // accountId -> 'connected'|'needs_login'|'logged_out'
-    this.listeners = [];           // global onMessage callbacks
+    this.sockets = new Map();           // accountId -> socket
+    this.statuses = new Map();          // accountId -> 'connected'|'needs_login'|'logged_out'
+    this._reconnects = new Map();       // accountId -> consecutive reconnect attempt counter
+    this.listeners = [];                // global onMessage callbacks
     this.logger = consoleLogger({ level: "warn" });
+    // Allow tests to pass reconnectBaseMs:0 to disable backoff delays.
+    this._reconnectBaseMs = reconnectBaseMs !== undefined ? reconnectBaseMs : WhatsAppProvider._RECONNECT_BASE_MS;
   }
 
   getSessionDir(accountId) {
@@ -173,9 +177,26 @@ export class WhatsAppProvider extends CommsProvider {
       ?? null;
   }
 
+  // Codes that should NOT trigger auto-reconnect: the session is permanently
+  // invalid and re-connecting without re-login or manual intervention would
+  // just spin in a tight storm.
+  static _NO_RECONNECT_CODES = new Set([
+    401, // loggedOut         — must re-login
+    440, // connectionReplaced — another client took over
+    500, // badSession        — auth is corrupt; reconnecting won't fix it
+  ]);
+
+  // Maximum consecutive reconnect attempts before giving up.
+  static _MAX_RECONNECTS = 5;
+  // Base delay (ms) between reconnect attempts; doubles with each attempt (capped).
+  static _RECONNECT_BASE_MS = 500;
+  static _RECONNECT_MAX_MS  = 30_000;
+
   _wireConnection(accountId, sock, projectDir, makeSocket) {
     sock.ev.on("connection.update", async (update) => {
       if (update.connection === "open") {
+        // Successful open — reset per-account backoff counter.
+        this._reconnects.set(accountId, 0);
         this.statuses.set(accountId, "connected");
         return;
       }
@@ -187,8 +208,25 @@ export class WhatsAppProvider extends CommsProvider {
           try { await this._wipeAuth(accountId); } catch {}
           return;
         }
-        // restartRequired(515) / connectionClosed(428) / others: recreate socket.
+        if (WhatsAppProvider._NO_RECONNECT_CODES.has(code)) {
+          // Permanent failure — surface as logged_out so callers re-link.
+          this.statuses.set(accountId, "logged_out");
+          return;
+        }
+        // restartRequired(515) / connectionClosed(428) / connectionLost(408) /
+        // others: attempt bounded reconnect with exponential backoff.
         this.statuses.set(accountId, "needs_login");
+        const attempts = (this._reconnects.get(accountId) || 0) + 1;
+        this._reconnects.set(accountId, attempts);
+        if (attempts > WhatsAppProvider._MAX_RECONNECTS) {
+          this.logger.warn("reconnect limit reached, giving up", { accountId, attempts });
+          return;
+        }
+        const delay = Math.min(
+          this._reconnectBaseMs * Math.pow(2, attempts - 1),
+          WhatsAppProvider._RECONNECT_MAX_MS
+        );
+        await new Promise((r) => setTimeout(r, delay));
         try {
           await this.connect(accountId, { makeSocket }); // a socket is single-use after close
         } catch (e) { this.logger.warn("reconnect failed", String(e)); }
@@ -219,14 +257,31 @@ export class WhatsAppProvider extends CommsProvider {
     }
 
     // QR path: resolve on the first qr from connection.update; guard re-emits.
-    return await new Promise((resolve) => {
-      let resolved = false;
-      const onUpdate = async (update) => {
-        if (resolved || !update.qr) return;
-        resolved = true;
-        const dataUrl = await qrToDataUrl(update.qr);
-        resolve({ method: "qr", payload: { dataUrl, ascii: `[QR] scan in WhatsApp > Linked Devices\n${update.qr}` } });
+    // Timeout (30 s default) prevents the promise from hanging forever when the
+    // connection reaches 'open' without ever emitting a qr (already-authenticated
+    // session) or when a transport error prevents qr delivery.
+    const QR_TIMEOUT_MS = 30_000;
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const settle = (fn, val) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(val);
       };
+      const onUpdate = async (update) => {
+        if (update.connection === "open") {
+          // Connected without ever sending a QR — session was already authenticated.
+          settle(reject, Object.assign(new Error("link_no_qr: session already authenticated; use re-link after logout"), { code: "link_no_qr" }));
+          return;
+        }
+        if (!update.qr) return;
+        const dataUrl = await qrToDataUrl(update.qr);
+        settle(resolve, { method: "qr", payload: { dataUrl, ascii: `[QR] scan in WhatsApp > Linked Devices\n${update.qr}` } });
+      };
+      const timer = setTimeout(() => {
+        settle(reject, Object.assign(new Error("link_timeout: QR not emitted within timeout"), { code: "link_timeout" }));
+      }, QR_TIMEOUT_MS);
       sock.ev.on("connection.update", onUpdate);
     });
   }
