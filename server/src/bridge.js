@@ -257,7 +257,7 @@ export class Bridge {
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     if (req.method === "OPTIONS") { res.writeHead(204).end(); return; }
 
-    if (!url.pathname.startsWith("/claude/")) {
+    if (!url.pathname.startsWith("/claude/") && !url.pathname.startsWith("/os/")) {
       res.writeHead(404, { "Content-Type": "application/json" })
          .end(JSON.stringify({ error: "not found" }));
       return;
@@ -319,12 +319,17 @@ export class Bridge {
         if (process.platform !== "darwin") {
           return this._respondJson(res, 200, { ok: false, reason: "not-macos" });
         }
-        try {
-          exec('open "x-apple.systempreferences:com.apple.preference.notifications"');
-          return this._respondJson(res, 200, { ok: true });
-        } catch (e) {
-          return this._respondJson(res, 200, { ok: false, reason: String(e?.message ?? e) });
+        if (process.env.MOCHI_NO_OS_EXEC) {
+          return this._respondJson(res, 200, { ok: true, skipped: true });
         }
+        // exec is async — its failures surface in the callback, not as a throw,
+        // so respond from there to report the real outcome.
+        exec('open "x-apple.systempreferences:com.apple.preference.notifications"', (err) => {
+          this._respondJson(res, 200, err
+            ? { ok: false, reason: String(err.message ?? err) }
+            : { ok: true });
+        });
+        return;
       }
       this._respondJson(res, 404, { error: "not found" });
     });

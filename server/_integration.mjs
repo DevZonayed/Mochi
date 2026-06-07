@@ -163,6 +163,8 @@ async function main() {
       SUPER_TESTER_WS_PORT: String(TEST_PORT),
       SUPER_TESTER_AUTO_LAUNCH: "false",
       SUPER_TESTER_EXTENSION_WAIT_MS: "5000",
+      // Don't actually open macOS System Settings during the test.
+      MOCHI_NO_OS_EXEC: "1",
     },
     stderr: "pipe",
   });
@@ -282,6 +284,14 @@ async function main() {
   const attnRes = parsePayload(await client.callTool({ name: "browser_request_attention", arguments: { reason: "look here" } }));
   assertOk("request_attention ok", attnRes.ok === true, attnRes);
   assertEq("request_attention reason echoed", attnRes.reason, "look here");
+
+  // ----- 9c) /os/open-notification-settings HTTP route is reachable -----
+  // (regression guard: it must NOT 404 behind the /claude/ path prefix gate)
+  logStep("Hitting /os/open-notification-settings over HTTP");
+  const osResp = await fetch(`http://127.0.0.1:${TEST_PORT}/os/open-notification-settings`, { method: "POST" });
+  assertEq("os route status 200 (not 404)", osResp.status, 200);
+  const osBody = await osResp.json();
+  assertOk("os route returns a boolean ok", typeof osBody.ok === "boolean", osBody);
 
   // ----- 10) Confirm wire types the broker actually forwarded -----
   logStep("Verifying wire types reached the fake extension");

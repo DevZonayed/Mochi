@@ -50,12 +50,11 @@ chrome.storage.local.get(["notifEnabled", "notifVerified"]).then((o) => {
 
 // Post an OS notification for a session. Never raises the window — that only
 // happens if the user clicks (see chrome.notifications.onClicked below).
+// When notifications are off we just no-op: a toolbar badge would collide with
+// the painted status dot in the icon and never reliably clear, so it's worse
+// than nothing.
 async function notify(clientId, { kind = "info", message = "", requireInteraction = false } = {}) {
-  if (!notifPrefs.enabled) {
-    // Fallback nudge for users who turned toasts off: a dot on the toolbar icon.
-    try { chrome.action.setBadgeText({ text: "•" }); } catch {}
-    return false;
-  }
+  if (!notifPrefs.enabled) return false;
   const s = clientId ? sessions.get(clientId) : null;
   const label = (s && s.label) || "Mochi";
   const notificationId = `mochi:${clientId || "global"}:${kind}`;
@@ -75,8 +74,23 @@ async function notify(clientId, { kind = "info", message = "", requireInteractio
   } catch { return false; }
 }
 
+// Recover the focus target for a notification whose in-memory entry was lost to
+// an MV3 service-worker eviction. The id encodes the clientId; persisted session
+// state (windowId/primaryTabId) is rehydrated by restoreSessions().
+async function resolveNotifTarget(id) {
+  const direct = notifTargets.get(id);
+  if (direct) return direct;
+  const parts = String(id).split(":");
+  if (parts[0] !== "mochi" || parts.length < 3) return null;
+  const clientId = parts.slice(1, -1).join(":");
+  if (!clientId || clientId === "global") return null;
+  try { await restoreSessions(); } catch {}
+  const s = sessions.get(clientId);
+  return s ? { clientId, windowId: s.windowId, tabId: s.primaryTabId } : null;
+}
+
 chrome.notifications.onClicked.addListener(async (id) => {
-  const target = notifTargets.get(id);
+  const target = await resolveNotifTarget(id);
   try { await chrome.notifications.clear(id); } catch {}
   notifTargets.delete(id);
   if (!target) return;
@@ -88,6 +102,19 @@ chrome.notifications.onClicked.addListener(async (id) => {
   }
 });
 chrome.notifications.onClosed.addListener((id) => { notifTargets.delete(id); });
+
+// Drop any lingering notifications/targets for a session that's ending, so a
+// later click can't resolve to a torn-down window/tab.
+function clearClientNotifications(clientId) {
+  if (!clientId) return;
+  const prefix = `mochi:${clientId}:`;
+  for (const id of [...notifTargets.keys()]) {
+    if (id.startsWith(prefix)) {
+      notifTargets.delete(id);
+      try { chrome.notifications.clear(id); } catch {}
+    }
+  }
+}
 
 // Diagnostic logger. Two sinks: SW DevTools console (for live tailing) and a
 // ring buffer in chrome.storage.local (survives SW restarts so we can see the
@@ -232,6 +259,7 @@ function serializeSessions() {
     primaryTabId: s.primaryTabId,
     tabIds: [...s.tabIds],
     ownsWindow: !!s.ownsWindow,
+    label: s.label,
     visuals: s.visuals,
   }));
 }
@@ -300,6 +328,7 @@ async function restoreSessions() {
         primaryTabId,
         tabIds: new Set(validIds),
         ownsWindow: !!raw.ownsWindow,
+        label: raw.label,
         visuals: raw.visuals && typeof raw.visuals === "object"
           ? { ...DEFAULT_VISUALS, ...raw.visuals }
           : { ...DEFAULT_VISUALS },
@@ -1115,6 +1144,7 @@ async function sessionEnd({ closeTabs = false } = {}, clientId) {
   // Remove ownership map entries (listeners may also do this — idempotent).
   for (const id of ids) tabOwner.delete(id);
   sessions.delete(clientId);
+  clearClientNotifications(clientId);
   schedulePersistSessions();
   // Explicit end → don't auto-restart on the next command.
   await clearCachedSessionConfig(clientId);
@@ -2402,10 +2432,16 @@ chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
       } else if (req?.type === "popup_set_notif_verified") {
         notifPrefs.verified = !!req.verified;
         await chrome.storage.local.set({ notifVerified: notifPrefs.verified });
+        // The test toast has served its purpose — clear it so it doesn't linger.
+        try { await chrome.notifications.clear("mochi:global:test"); } catch {}
+        notifTargets.delete("mochi:global:test");
         sendResponse({ verified: notifPrefs.verified });
       } else if (req?.type === "popup_send_test_notification") {
         let ok = false;
         try {
+          // Re-creating with the same id only UPDATES an existing toast and may
+          // not re-pop a visible banner — clear first so the retry always shows.
+          try { await chrome.notifications.clear("mochi:global:test"); } catch {}
           await chrome.notifications.create("mochi:global:test", {
             type: "basic",
             iconUrl: chrome.runtime.getURL("icons/mochi-128.png"),

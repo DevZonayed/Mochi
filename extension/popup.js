@@ -139,8 +139,29 @@ async function refreshNotif() {
   if (!res) return;
   const sw = notifEls.sw();
   if (sw && document.activeElement !== sw) sw.checked = !!res.enabled;
-  // Show onboarding until verified (and only when notifications are enabled).
-  notifEls.onboard().style.display = (res.enabled && !res.verified) ? "block" : "none";
+
+  // Chrome's own notification permission ("denied" = blocked at the browser
+  // level, distinct from the macOS toggle). Re-show onboarding if it's denied
+  // even after a prior verify, so a later revocation isn't a silent dead end.
+  const denied = res.permission === "denied";
+  const show = res.enabled && (!res.verified || denied);
+  notifEls.onboard().style.display = show ? "block" : "none";
+
+  // When the card is hidden, reset the sub-flow so it reopens clean (no stale
+  // "Did you see it?" / help panel from a previous, abandoned attempt).
+  if (!show) {
+    notifEls.confirm().style.display = "none";
+    notifEls.help().style.display = "none";
+    notifEls.status().textContent = "";
+  }
+
+  // Tailor the lead text to the detectable cause.
+  const lead = document.getElementById("notif-onboard-text");
+  if (lead) {
+    lead.textContent = denied
+      ? "Chrome has notifications switched off for Mochi. Turn them on, then send a test."
+      : "Let Mochi tap you on the shoulder when it needs you — instead of jumping in front of your work.";
+  }
 }
 
 notifEls.sw().addEventListener("change", async (e) => {
