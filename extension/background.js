@@ -90,16 +90,55 @@ const tabBuffers = new Map();
 function getTabBuf(tabId) {
   let b = tabBuffers.get(tabId);
   if (!b) {
-    b = { console: [], network: new Map(), netOrder: [] };
+    // lastNavAt: wall-clock ms of the most recent main-frame navigation on this
+    // tab. Stamped by navigate() and the Page.frameNavigated CDP event. Lets
+    // console/network reads scope to "since the current page loaded" so a stale
+    // pre-navigation buffer can't masquerade as the page under test.
+    b = { console: [], network: new Map(), netOrder: [], lastNavAt: 0 };
     tabBuffers.set(tabId, b);
   }
   return b;
+}
+
+// Stamp the navigation epoch for a tab. Called on real main-frame navigations
+// so `sinceNavigation` reads only reflect the live page.
+function markNavigation(tabId) {
+  if (tabId == null) return;
+  const b = getTabBuf(tabId);
+  b.lastNavAt = Date.now();
 }
 
 function pushConsole(tabId, entry) {
   const b = getTabBuf(tabId);
   b.console.push(entry);
   if (b.console.length > MAX_CONSOLE) b.console.splice(0, b.console.length - MAX_CONSOLE);
+}
+
+const MAX_BODY_CHARS = 8000;
+let __waitRespSeq = 0; // unique-ifies wait_for_response listener keys
+// Tabs whose cache must stay disabled for the rest of the session (navigate
+// {disableCache:true}). CDP's setCacheDisabled is per-debugger-session state, so
+// it's re-applied on every (re)attach — otherwise session_heal or an MV3 SW
+// restart would silently re-enable caching and a "fix verified" could be read
+// off a stale bundle. Cleared on tab close / session end.
+const cacheDisabledTabs = new Set();
+
+// Fire-and-forget capture of an error response's body. CDP keeps the body only
+// briefly after loadingFinished, so we grab it immediately. Never throws.
+function captureResponseBody(tabId, requestId, entry) {
+  entry.body = ""; // mark as in-flight so we don't double-fetch
+  Promise.resolve()
+    .then(() => chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", { requestId }))
+    .then((res) => {
+      if (!res) return;
+      let body = res.body ?? "";
+      if (res.base64Encoded) {
+        try { body = atob(body); } catch { /* leave as-is */ }
+      }
+      entry.body = String(body).slice(0, MAX_BODY_CHARS);
+      entry.bodyTruncated = String(body).length > MAX_BODY_CHARS;
+    })
+    .catch(() => { /* body unavailable — leave the empty marker */ });
 }
 
 function recordNetwork(tabId, requestId, patch) {
@@ -377,6 +416,11 @@ async function ensureAttached(tabId) {
   try { await chrome.debugger.sendCommand({ tabId }, "Page.enable"); } catch {}
   try { await chrome.debugger.sendCommand({ tabId }, "Runtime.enable"); } catch {}
   try { await chrome.debugger.sendCommand({ tabId }, "Network.enable"); } catch {}
+  // Re-apply a sticky cache-off (navigate {disableCache:true}) — CDP loses it on
+  // every re-attach, so without this a heal/SW-restart silently re-enables cache.
+  if (cacheDisabledTabs.has(tabId)) {
+    try { await chrome.debugger.sendCommand({ tabId }, "Network.setCacheDisabled", { cacheDisabled: true }); } catch {}
+  }
   // Make sure a buffer exists so capture from now on is recorded.
   getTabBuf(tabId);
 }
@@ -391,7 +435,10 @@ async function detachIfAttached(tabId, source = "unknown") {
 }
 
 async function detachSessionTabs(s) {
-  for (const id of [...s.tabIds]) await detachIfAttached(id);
+  for (const id of [...s.tabIds]) {
+    cacheDisabledTabs.delete(id); // session over — drop sticky cache-off
+    await detachIfAttached(id);
+  }
 }
 
 async function cdp(tabId, method, params = {}) {
@@ -554,6 +601,13 @@ chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
   }
   try {
     switch (method) {
+      case "Page.frameNavigated": {
+        // Only the top-level frame resets the navigation epoch — subframe
+        // navigations (ads, iframes) must not clear the page's console/network
+        // history out from under a `sinceNavigation` read.
+        if (!params.frame?.parentId) markNavigation(tabId);
+        break;
+      }
       case "Runtime.consoleAPICalled": {
         const args = (params.args || []).map((a) => {
           if (a.unserializableValue) return String(a.unserializableValue);
@@ -620,6 +674,14 @@ chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
           entry.finished = true;
           entry.size = params.encodedDataLength;
           entry.durationMs = entry.sentMs ? Date.now() - entry.sentMs : null;
+          // Eagerly grab the response body for error responses (>=400) while
+          // it's still resident in CDP. This is the difference between "the
+          // save 500'd" and "the save 500'd: SMTP not configured". Bodies are
+          // truncated and fire-and-forget so a slow/failed fetch never blocks
+          // capture. 2xx bodies are skipped to keep memory bounded.
+          if (typeof entry.status === "number" && entry.status >= 400 && entry.body == null) {
+            captureResponseBody(tabId, params.requestId, entry);
+          }
         }
         break;
       }
@@ -901,6 +963,11 @@ async function dispatch(type, p, clientId) {
     case "evaluate":           return evaluate(p, clientId);
     case "console_messages":   return consoleMessages(p, clientId);
     case "network_requests":   return networkRequests(p, clientId);
+    case "audit_interactives": return auditInteractives(p, clientId);
+    case "wait_for_response":  return waitForResponse(p, clientId);
+    case "set_storage":        return setStorage(p, clientId);
+    case "page_assets":        return pageAssets(p, clientId);
+    case "session_heal":       return sessionHeal(p, clientId);
     case "upload_file":        return uploadFile(p, clientId);
     default: throw new Error(`unknown command: ${type}`);
   }
@@ -978,6 +1045,9 @@ async function sessionStart(input = {}, clientId) {
   // Attach proactively so console + network capture is running from t=0.
   // If the page is chrome:// or otherwise un-attachable, we silently skip.
   ensureAttached(tab.id).catch(() => {});
+  // Stamp the nav epoch for the initial page so the first sinceNavigation read
+  // is scoped correctly even if Page.frameNavigated fired before attach.
+  if (url && url !== "about:blank") markNavigation(tab.id);
   injectOverlay(tab.id, session.visuals).catch(() => {});
 
   // Persist the inputs so dispatchWithAutoRecover can rebuild this session if
@@ -1043,26 +1113,46 @@ async function forceCleanupClient(clientId) {
   }
 }
 
-async function navigate({ url, tabId, bringToFront = false } = {}, clientId) {
+async function navigate({ url, tabId, bringToFront = false, hardReload = false, disableCache = false } = {}, clientId) {
   if (!url) throw new Error("url is required");
   const s = getSession(clientId);
   const t = targetTab(s, tabId);
+  // Cache control: hardReload/disableCache force the browser to refetch assets
+  // instead of trusting a possibly-stale cached bundle. This is the antidote to
+  // "you're looking at an old JS bundle" confusion — pair it with
+  // browser_page_assets to confirm the live hash matches the deployed build.
+  let cacheToggled = false;
+  if (hardReload || disableCache) {
+    try {
+      await cdp(t, "Network.setCacheDisabled", { cacheDisabled: true });
+      cacheToggled = true;
+    } catch {}
+  }
+  // disableCache is sticky for the session — remember the tab so the cache-off
+  // state survives debugger re-attach (see ensureAttached).
+  if (disableCache) cacheDisabledTabs.add(t);
   // Always keep the tab `active: true` within its Chrome window — this prevents
   // Chrome from throttling rAF / timers / SPA rendering on the target tab.
   // Only raise the entire window to OS foreground when bringToFront is explicit
   // (default false in 0.4.1 — was true in 0.4.0 and stole user's keyboard focus
   // on every navigate).
   await chrome.tabs.update(t, { url, active: true });
+  markNavigation(t);
   if (bringToFront) {
     try { await chrome.windows.update(s.windowId, { focused: true }); } catch {}
   }
   return withVisuals(t, clientId, {
     action: "Navigate",
-    text: `▶ Navigating to ${shortUrl(url)}`,
+    text: `▶ ${hardReload ? "Hard-loading" : "Navigating to"} ${shortUrl(url)}`,
   }, async () => {
     await waitForLoad(t);
+    // Re-enable the cache after a one-shot hardReload so later requests behave
+    // normally. A persistent disableCache:true keeps it off for the session.
+    if (cacheToggled && hardReload && !disableCache) {
+      try { await cdp(t, "Network.setCacheDisabled", { cacheDisabled: false }); } catch {}
+    }
     const finalUrl = await getTabUrl(t) ?? url;
-    return { tabId: t, url: finalUrl };
+    return { tabId: t, url: finalUrl, hardReload: !!hardReload, cacheDisabled: !!disableCache };
   });
 }
 
@@ -1079,7 +1169,14 @@ async function openTab({ url = "about:blank", active = false, makePrimary = true
   tabOwner.set(tab.id, clientId);
   if (makePrimary) s.primaryTabId = tab.id;
   schedulePersistSessions();
-  if (url && url !== "about:blank") await waitForLoad(tab.id);
+  if (url && url !== "about:blank") {
+    await waitForLoad(tab.id);
+    // Attach + stamp the nav epoch so the first sinceNavigation read on this tab
+    // is actually scoped (mirrors sessionStart) — otherwise it silently returns
+    // the whole buffer.
+    ensureAttached(tab.id).catch(() => {});
+    markNavigation(tab.id);
+  }
   const finalUrl = await getTabUrl(tab.id) ?? url;
   return { tabId: tab.id, url: finalUrl, primary: makePrimary };
 }
@@ -1198,8 +1295,29 @@ async function click({ ref, tabId, button = "left", clickCount = 1 } = {}, clien
   try {
     c = await getElementCenter(t, ref);
   } catch (e) {
-    await showActionFailureHud(t, clientId, "Click", e?.message ?? e);
-    throw e;
+    // One retry for the just-rendered case: SPA route changes often mount the
+    // target a tick after navigation. A single 200ms re-probe turns a class of
+    // flaky "element not found" failures into reliable clicks.
+    const msg = String(e?.message ?? e);
+    if (/element not found/i.test(msg)) {
+      await new Promise((r) => setTimeout(r, 200));
+      try {
+        c = await getElementCenter(t, ref);
+      } catch (e2) {
+        await showActionFailureHud(t, clientId, "Click", e2?.message ?? e2);
+        throw e2;
+      }
+    } else {
+      await showActionFailureHud(t, clientId, "Click", msg);
+      throw e;
+    }
+  }
+  // A disabled control is a no-op in the DOM — dispatching a mouse event would
+  // "succeed" while nothing happens. Fail loudly so the agent records a real
+  // verdict (DISABLED) instead of a false WORKS.
+  if (c?.disabled) {
+    await showActionFailureHud(t, clientId, "Click", "element is disabled");
+    throw new Error(`element is disabled: ${ref}`);
   }
   return withVisuals(t, clientId, {
     action: "Click",
@@ -1547,38 +1665,49 @@ async function evaluate({
   };
 }
 
-async function consoleMessages({ tabId, level, since, limit = 100, clear = false } = {}, clientId) {
+async function consoleMessages({ tabId, level, since, sinceNavigation = false, limit = 100, clear = false } = {}, clientId) {
   const s = getSession(clientId);
   const t = targetTab(s, tabId);
   // Make sure capture is running (no-op if already attached).
   await ensureAttached(t).catch(() => {});
   const buf = tabBuffers.get(t);
-  if (!buf) return { tabId: t, messages: [], total: 0, captureActive: false };
+  if (!buf) return { tabId: t, messages: [], total: 0, captureActive: false, sinceNavigation: !!sinceNavigation };
   let messages = buf.console;
   if (level) {
     const want = String(level).toLowerCase();
     messages = messages.filter((m) => String(m.level).toLowerCase() === want);
   }
-  if (typeof since === "number") {
-    messages = messages.filter((m) => m.ts >= since);
-  }
+  // sinceNavigation scopes to the live page so a stale pre-navigation buffer
+  // can't produce a false "no errors". An explicit `since` still wins if larger.
+  let floor = typeof since === "number" ? since : 0;
+  if (sinceNavigation) floor = Math.max(floor, buf.lastNavAt || 0);
+  if (floor > 0) messages = messages.filter((m) => m.ts >= floor);
   const total = messages.length;
   const max = Math.max(1, Math.min(500, Number(limit) || 100));
   const sliced = messages.slice(-max);
   if (clear) buf.console = [];
-  return { tabId: t, captureActive: true, total, returned: sliced.length, messages: sliced };
+  // If the caller asked to scope by navigation but we have no nav epoch yet, the
+  // read is actually the WHOLE buffer — flag it so "no errors" isn't trusted blindly.
+  const navScopeUnavailable = !!sinceNavigation && !(buf.lastNavAt > 0);
+  return {
+    tabId: t, captureActive: true, total, returned: sliced.length,
+    sinceNavigation: !!sinceNavigation, navAt: buf.lastNavAt || null,
+    ...(navScopeUnavailable ? { navScopeUnavailable: true } : {}),
+    messages: sliced,
+  };
 }
 
 async function networkRequests({
   tabId, urlContains, method, statusGte, statusLt,
-  failedOnly = false, limit = 50, includeRequestHeaders = false,
-  includeResponseHeaders = false,
+  failedOnly = false, sinceNavigation = false, sinceMs, limit = 50,
+  includeRequestHeaders = false, includeResponseHeaders = false,
+  includeBody = false,
 } = {}, clientId) {
   const s = getSession(clientId);
   const t = targetTab(s, tabId);
   await ensureAttached(t).catch(() => {});
   const buf = tabBuffers.get(t);
-  if (!buf) return { tabId: t, requests: [], total: 0, captureActive: false };
+  if (!buf) return { tabId: t, requests: [], total: 0, captureActive: false, sinceNavigation: !!sinceNavigation };
 
   // Pull entries in arrival order (netOrder is FIFO).
   const all = buf.netOrder.map((id) => buf.network.get(id)).filter(Boolean);
@@ -1591,6 +1720,12 @@ async function networkRequests({
   if (typeof statusGte === "number") filtered = filtered.filter((r) => (r.status ?? 0) >= statusGte);
   if (typeof statusLt === "number") filtered = filtered.filter((r) => (r.status ?? 0) < statusLt);
   if (failedOnly) filtered = filtered.filter((r) => r.failed || (r.status >= 400));
+  // Time scoping: sinceNavigation uses the page's nav epoch; sinceMs is an
+  // explicit floor (used by browser_act_and_observe to capture only the
+  // requests an action triggered).
+  let floor = typeof sinceMs === "number" ? sinceMs : 0;
+  if (sinceNavigation) floor = Math.max(floor, buf.lastNavAt || 0);
+  if (floor > 0) filtered = filtered.filter((r) => (r.sentMs ?? 0) >= floor);
 
   const max = Math.max(1, Math.min(200, Number(limit) || 50));
   const sliced = filtered.slice(-max).map((r) => {
@@ -1603,13 +1738,184 @@ async function networkRequests({
     };
     if (includeRequestHeaders) out.requestHeaders = r.requestHeaders ?? null;
     if (includeResponseHeaders) out.responseHeaders = r.responseHeaders ?? null;
+    // Error-response bodies are captured automatically (see loadingFinished).
+    // Surface them when asked, or always for failed/>=400 so the agent sees
+    // *why* it failed without a second call.
+    if ((includeBody || r.failed || (r.status >= 400)) && r.body != null && r.body !== "") {
+      out.body = r.body;
+      if (r.bodyTruncated) out.bodyTruncated = true;
+    }
     return out;
   });
+  const navScopeUnavailable = !!sinceNavigation && !(buf.lastNavAt > 0);
   return {
     tabId: t, captureActive: true,
+    sinceNavigation: !!sinceNavigation, navAt: buf.lastNavAt || null,
+    ...(navScopeUnavailable ? { navScopeUnavailable: true } : {}),
     total: filtered.length, returned: sliced.length,
     requests: sliced,
   };
+}
+
+// Enumerate every actionable element on the page. The backbone of exhaustive QA
+// coverage: you can't claim "tested every control" without a list of controls.
+async function auditInteractives({ tabId, scope = "all", limit = 400, includeHidden = false } = {}, clientId) {
+  const s = getSession(clientId);
+  const t = targetTab(s, tabId);
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId: t },
+    func: __auditInteractives,
+    args: [scope, Math.max(1, Math.min(2000, Number(limit) || 400)), !!includeHidden],
+  });
+  return { tabId: t, url: await getTabUrl(t), ...result };
+}
+
+// glob → RegExp. Supports * (any run) and ? (single char). Everything else is
+// matched literally. Used by wait_for_response to match request URLs.
+function __globToRegExp(glob) {
+  const esc = String(glob).replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(esc);
+}
+
+// Resolve when a network response matching {urlGlob, method, status range}
+// arrives — turning "did the save persist?" from inference into a fact. Checks
+// already-captured requests first (handles the act-then-wait race), then waits
+// on live CDP events until the deadline.
+async function waitForResponse({
+  tabId, urlGlob, urlContains, method, statusGte, statusLt, sinceMs, timeoutMs = 15000,
+} = {}, clientId) {
+  const s = getSession(clientId);
+  const t = targetTab(s, tabId);
+  await ensureAttached(t).catch(() => {});
+  const re = urlGlob ? __globToRegExp(urlGlob) : null;
+  const wantMethod = method ? String(method).toUpperCase() : null;
+  const floor = typeof sinceMs === "number" ? sinceMs : 0;
+  const matches = (url, status, mthd) => {
+    if (re && !re.test(url || "")) return false;
+    if (urlContains && !(url || "").includes(urlContains)) return false;
+    if (wantMethod && String(mthd || "").toUpperCase() !== wantMethod) return false;
+    if (typeof statusGte === "number" && (status ?? 0) < statusGte) return false;
+    if (typeof statusLt === "number" && (status ?? 0) >= statusLt) return false;
+    return true;
+  };
+
+  // 1) Already captured? (response that arrived between the action and this call)
+  const buf = tabBuffers.get(t);
+  if (buf) {
+    for (const id of buf.netOrder) {
+      const r = buf.network.get(id);
+      if (!r || (r.sentMs ?? 0) < floor) continue;
+      if (typeof r.status === "number" && matches(r.url, r.status, r.method)) {
+        return {
+          tabId: t, matched: true, source: "buffer",
+          request: { method: r.method, url: r.url, status: r.status, failed: !!r.failed, durationMs: r.durationMs ?? null, body: r.body || undefined },
+        };
+      }
+    }
+  }
+
+  // 2) Wait on live events.
+  const deadline = Date.now() + Math.max(100, Math.min(120000, Number(timeoutMs) || 15000));
+  if (!globalThis.__mochiCdpListeners) globalThis.__mochiCdpListeners = new Map();
+  const key = "waitresp-" + t + "-" + (++__waitRespSeq);
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      globalThis.__mochiCdpListeners.delete(key);
+      clearTimeout(timer);
+      resolve(val);
+    };
+    const listener = (cdpMethod, params) => {
+      try {
+        if (cdpMethod === "Network.responseReceived") {
+          const r = params.response || {};
+          if (matches(r.url, r.status, r.requestMethod || r.method)) {
+            finish({ tabId: t, matched: true, source: "event", request: { url: r.url, status: r.status, method: r.requestMethod, mimeType: r.mimeType } });
+          }
+        } else if (cdpMethod === "Network.loadingFailed" && (statusGte == null && statusLt == null)) {
+          // A failed request can satisfy a status-agnostic wait (e.g. "wait for
+          // /api/save to come back, pass or fail").
+          const entry = buf?.network.get(params.requestId);
+          if (entry && matches(entry.url, undefined, entry.method)) {
+            finish({ tabId: t, matched: true, source: "event", request: { url: entry.url, failed: true, errorText: params.errorText } });
+          }
+        }
+      } catch {}
+    };
+    globalThis.__mochiCdpListeners.set(key, { tabId: t, listener });
+    const timer = setTimeout(() => finish({ tabId: t, matched: false, reason: "timeout", timeoutMs }), deadline - Date.now());
+  });
+}
+
+// Seed localStorage / sessionStorage / cookies. Enables deterministic auth —
+// re-seed a known-good token instead of fighting token expiry mid-run.
+async function setStorage({ tabId, localStorage: ls, sessionStorage: ss, cookies, clear = false } = {}, clientId) {
+  const s = getSession(clientId);
+  const t = targetTab(s, tabId);
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId: t },
+    func: __setStorage,
+    args: [ls ?? null, ss ?? null, !!clear],
+  });
+  let cookieResults = [];
+  if (Array.isArray(cookies) && cookies.length) {
+    const url = await getTabUrl(t);
+    for (const c of cookies) {
+      try {
+        const params = { name: c.name, value: String(c.value ?? ""), url: c.url || url };
+        if (c.domain) params.domain = c.domain;
+        if (c.path) params.path = c.path;
+        if (typeof c.secure === "boolean") params.secure = c.secure;
+        if (typeof c.httpOnly === "boolean") params.httpOnly = c.httpOnly;
+        if (c.sameSite) params.sameSite = c.sameSite;
+        if (typeof c.expires === "number") params.expires = c.expires;
+        const r = await cdp(t, "Network.setCookie", params);
+        cookieResults.push({ name: c.name, success: !!r?.success });
+      } catch (e) {
+        cookieResults.push({ name: c.name, success: false, error: String(e?.message ?? e) });
+      }
+    }
+  }
+  return { tabId: t, url: await getTabUrl(t), ...result, cookies: cookieResults };
+}
+
+// Enumerate loaded JS/CSS assets and hash each (SHA-256, in-page so same-origin
+// credentials/CORS apply). QA confirms the live asset hash == the just-built
+// hash before trusting results — catches the stale-bundle class of bug.
+async function pageAssets({ tabId, types, limit = 60, hash = true } = {}, clientId) {
+  const s = getSession(clientId);
+  const t = targetTab(s, tabId);
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId: t },
+    func: __pageAssets,
+    args: [Array.isArray(types) ? types : null, Math.max(1, Math.min(300, Number(limit) || 60)), !!hash],
+  });
+  return { tabId: t, url: await getTabUrl(t), ...result };
+}
+
+// Self-heal a session: re-attach the debugger to every session tab and
+// re-enable the observed domains. Fixes a dropped attachment (the cause of
+// "clicks/evals time out") instead of only reporting it.
+async function sessionHeal({} = {}, clientId) {
+  const s = getSession(clientId);
+  const healed = [];
+  for (const id of [...s.tabIds]) {
+    try {
+      // Detach (if we still hold it) then re-attach — this fixes BOTH a
+      // chrome-side dropped attachment and a stuck one. Re-attaching a tab
+      // we're already attached to would fail, so we always detach first.
+      // Buffers (console/network) survive: onDetach only updates attachedTabs;
+      // tabBuffers are cleared only on tab removal.
+      await detachIfAttached(id, "session_heal");
+      await ensureAttached(id);
+      healed.push({ tabId: id, attached: attachedTabs.has(id) });
+    } catch (e) {
+      healed.push({ tabId: id, attached: false, error: String(e?.message ?? e) });
+    }
+  }
+  return { sessionId: s.id, primaryTabId: s.primaryTabId, healedTabs: healed };
 }
 
 async function assertCondition({ kind, target, value } = {}, clientId) {
@@ -1848,6 +2154,19 @@ function __getElementCenter(ref) {
     el.getAttribute("title") || el.getAttribute("placeholder") ||
     (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 100) || ""
   );
+  // Disabled detection: native `disabled`, ARIA, or an ancestor <fieldset
+  // disabled>. A disabled control is reported so click() can fail loudly
+  // instead of silently dispatching a mouse event that does nothing.
+  // NB: pointer-events:none is intentionally NOT treated as disabled — it's
+  // commonly on decorative wrappers/labels whose click is delegated to a
+  // parent, so folding it in produced false DISABLED verdicts.
+  const disabled =
+    !!el.disabled ||
+    el.getAttribute("aria-disabled") === "true" ||
+    !!el.closest("fieldset[disabled]");
+  const inViewport =
+    r.bottom > 0 && r.right > 0 &&
+    r.top < window.innerHeight && r.left < window.innerWidth;
   return {
     x: r.left + r.width / 2,
     y: r.top + r.height / 2,
@@ -1855,6 +2174,7 @@ function __getElementCenter(ref) {
     width: Math.round(r.width), height: Math.round(r.height),
     viewportW: window.innerWidth, viewportH: window.innerHeight,
     devicePixelRatio: window.devicePixelRatio,
+    disabled, inViewport, visible: r.width > 0 && r.height > 0,
     role, name,
   };
 }
@@ -1911,6 +2231,204 @@ function __resolveBox(ref) {
     box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
     viewport: { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio },
   };
+}
+
+// Runs in the page. Lists every actionable element with a stable selector and
+// the facts coverage needs: visibility, viewport position, disabled, and a
+// best-effort hasClickHandler heuristic.
+function __auditInteractives(scope, limit, includeHidden) {
+  const SEL = [
+    "button", "a[href]", "input:not([type=hidden])", "select", "textarea",
+    "[role=button]", "[role=link]", "[role=menuitem]", "[role=tab]",
+    "[role=switch]", "[role=checkbox]", "[role=radio]", "[role=option]",
+    "[onclick]", "[contenteditable=\"true\"]", "summary", "label[for]",
+    "[tabindex]:not([tabindex=\"-1\"])",
+  ].join(",");
+
+  function isVisible(el) {
+    const cs = window.getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden" || parseFloat(cs.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+  function accName(el) {
+    const v = el.getAttribute("aria-label") || el.getAttribute("alt") ||
+              el.getAttribute("title") || el.getAttribute("placeholder") || "";
+    if (v) return v.trim().slice(0, 120);
+    return (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  }
+  function selectorFor(el) {
+    if (el.id) return "#" + CSS.escape(el.id);
+    if (el.dataset && el.dataset.testid) return "[data-testid=\"" + CSS.escape(el.dataset.testid) + "\"]";
+    const name = el.getAttribute("name");
+    if (name) return el.tagName.toLowerCase() + "[name=\"" + CSS.escape(name) + "\"]";
+    const aria = el.getAttribute("aria-label");
+    if (aria) return el.tagName.toLowerCase() + "[aria-label=\"" + CSS.escape(aria) + "\"]";
+    // Fall back to a nth-of-type path from the nearest id-bearing ancestor.
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1 && parts.length < 5) {
+      if (node.id) { parts.unshift("#" + CSS.escape(node.id)); break; }
+      const tag = node.tagName.toLowerCase();
+      const parent = node.parentElement;
+      if (!parent) { parts.unshift(tag); break; }
+      const sames = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
+      parts.unshift(sames.length > 1 ? tag + ":nth-of-type(" + (sames.indexOf(node) + 1) + ")" : tag);
+      node = parent;
+    }
+    return parts.join(" > ");
+  }
+  function hasHandler(el) {
+    // Best-effort: content scripts can't read framework-attached listeners, so
+    // this is a heuristic, not a guarantee. Native interactivity, inline
+    // handlers, href, role, and cursor:pointer all count.
+    const tag = el.tagName.toLowerCase();
+    if (["button", "a", "input", "select", "textarea", "summary"].includes(tag)) return true;
+    if (el.hasAttribute("onclick") || typeof el.onclick === "function") return true;
+    if (el.getAttribute("role")) return true;
+    if (el.hasAttribute("href")) return true;
+    try { if (window.getComputedStyle(el).cursor === "pointer") return true; } catch {}
+    return false;
+  }
+  function isDisabled(el) {
+    return !!el.disabled || el.getAttribute("aria-disabled") === "true" || !!el.closest("fieldset[disabled]");
+  }
+
+  const all = Array.from(document.querySelectorAll(SEL));
+  const seen = new Set();
+  const out = [];
+  let totalVisible = 0;
+  let droppedAmbiguous = 0; // distinct elements that collapsed to a selector we already emitted
+  let truncatedByLimit = false;
+  for (const el of all) {
+    const visible = isVisible(el);
+    if (!visible && !includeHidden) continue;
+    const r = el.getBoundingClientRect();
+    const inViewport = r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth;
+    if (scope === "viewport" && !inViewport) continue;
+    if (visible) totalVisible += 1;
+    const selector = selectorFor(el);
+    // Two distinct controls can generate the same fallback selector. Counting the
+    // collision keeps coverage honest — droppedAmbiguous>0 means the 1:1
+    // element<->selector assumption broke and the agent should add data-testids.
+    if (seen.has(selector)) { droppedAmbiguous += 1; continue; }
+    seen.add(selector);
+    if (out.length >= limit) { truncatedByLimit = true; continue; }
+    out.push({
+      selector,
+      tag: el.tagName.toLowerCase(),
+      role: el.getAttribute("role") || el.tagName.toLowerCase(),
+      type: el.getAttribute("type") || undefined,
+      accessibleName: accName(el),
+      visible,
+      inViewport,
+      disabled: isDisabled(el),
+      hasClickHandler: hasHandler(el),
+      box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+    });
+  }
+  return {
+    title: document.title,
+    scope,
+    totalVisible,
+    returned: out.length,
+    droppedAmbiguous,
+    truncated: truncatedByLimit,
+    elements: out,
+  };
+}
+
+// Runs in the page. Writes localStorage/sessionStorage maps; optionally clears
+// first. Returns the resulting key counts.
+function __setStorage(ls, ss, clear) {
+  const apply = (store, map) => {
+    if (clear) { try { store.clear(); } catch {} }
+    let n = 0;
+    if (map && typeof map === "object") {
+      for (const [k, v] of Object.entries(map)) {
+        try { store.setItem(k, typeof v === "string" ? v : JSON.stringify(v)); n++; } catch {}
+      }
+    }
+    return n;
+  };
+  let localSet = 0, sessionSet = 0;
+  try { localSet = apply(window.localStorage, ls); } catch {}
+  try { sessionSet = apply(window.sessionStorage, ss); } catch {}
+  return {
+    localStorageKeys: (() => { try { return window.localStorage.length; } catch { return null; } })(),
+    sessionStorageKeys: (() => { try { return window.sessionStorage.length; } catch { return null; } })(),
+    localSet, sessionSet, cleared: !!clear,
+  };
+}
+
+// Runs in the page (async). Enumerates loaded script/style/document assets and
+// hashes each with SubtleCrypto so the caller can compare against a built hash.
+async function __pageAssets(types, limit, doHash) {
+  const want = new Set(types && types.length ? types : ["script", "css", "document"]);
+  const seen = new Set();
+  const list = [];
+
+  const add = (url, kind) => {
+    if (!url || seen.has(url)) return;
+    if (!/^https?:/i.test(url)) return;
+    seen.add(url);
+    list.push({ url, type: kind });
+  };
+
+  if (want.has("document")) add(location.href, "document");
+  if (want.has("script")) {
+    for (const sEl of document.querySelectorAll("script[src]")) add(sEl.src, "script");
+  }
+  if (want.has("css")) {
+    for (const l of document.querySelectorAll("link[rel~=stylesheet][href]")) add(l.href, "css");
+  }
+  // Also pull from the Resource Timing API to catch dynamically-loaded bundles.
+  try {
+    for (const e of performance.getEntriesByType("resource")) {
+      const it = e.initiatorType;
+      if (it === "script" && want.has("script")) add(e.name, "script");
+      else if ((it === "link" || it === "css") && want.has("css")) add(e.name, "css");
+    }
+  } catch {}
+
+  const sliced = list.slice(0, limit);
+  // Bounded fetch: a single hung asset (stalled CDN, mis-classified long-poll)
+  // must not block the whole call. 8s per asset, then record a timeout.
+  async function sha256(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(url, { credentials: "include", cache: "no-store", signal: controller.signal });
+      const buf = await res.arrayBuffer();
+      const digest = await crypto.subtle.digest("SHA-256", buf);
+      const hex = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+      return { sha256: hex, bytes: buf.byteLength, status: res.status };
+    } catch (e) {
+      return { sha256: null, error: controller.signal.aborted ? "timeout" : String(e && e.message || e) };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  let hashedCount = 0, failedCount = 0;
+  if (doHash) {
+    await Promise.all(sliced.map(async (a) => { Object.assign(a, await sha256(a.url)); }));
+    hashedCount = sliced.filter((a) => a.sha256).length;
+    failedCount = sliced.length - hashedCount;
+  }
+  // Page fingerprint: deterministic over the assets that hashed cleanly, keyed by
+  // url@sha256 so it ignores asset ORDER and transient fetch failures (a single
+  // network blip must not change the fingerprint). partial=true flags that some
+  // assets couldn't be hashed, so a hash mismatch isn't over-trusted.
+  let pageHash = null;
+  if (doHash) {
+    const joined = sliced.filter((a) => a.sha256).map((a) => a.url + "@" + a.sha256).sort().join("|");
+    try {
+      const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(joined));
+      pageHash = Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+    } catch {}
+  }
+  return { count: list.length, returned: sliced.length, hashedCount, failedCount, partial: failedCount > 0, pageHash, assets: sliced };
 }
 
 function __findByRoleName(wantRole, wantName, exact) {
@@ -2096,6 +2614,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   attachedTabs.delete(tabId);
   tabBuffers.delete(tabId);
   overlayInjected.delete(tabId);
+  cacheDisabledTabs.delete(tabId);
   const ownerClientId = tabOwner.get(tabId);
   if (!ownerClientId) return;
   tabOwner.delete(tabId);

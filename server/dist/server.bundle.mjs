@@ -95356,7 +95356,9 @@ var tools = [
       properties: {
         url: { type: "string" },
         tabId: { type: "number" },
-        bringToFront: { type: "boolean", default: false, description: "Raise the Chrome window to OS foreground (steals keyboard focus). Default false in 0.4.1+ \u2014 the tab is always made active within its window regardless." }
+        bringToFront: { type: "boolean", default: false, description: "Raise the Chrome window to OS foreground (steals keyboard focus). Default false in 0.4.1+ \u2014 the tab is always made active within its window regardless." },
+        hardReload: { type: "boolean", default: false, description: "Force a cache-bypassing load (CDP Network.setCacheDisabled). Use after a deploy so you never test a stale JS bundle. Pair with browser_page_assets to confirm the live hash matches the build." },
+        disableCache: { type: "boolean", default: false, description: "Keep the cache disabled for subsequent requests in this session (not just this load)." }
       },
       required: ["url"]
     }
@@ -95612,8 +95614,8 @@ var tools = [
   // --- diagnostics + observability ---
   {
     name: "browser_session_health",
-    description: "Diagnostic snapshot of the bridge + active session: bridge mode, extension connectivity, current URL/origin, in-memory trace length, server uptime, MCP client count. Use when something feels stuck before reaching for browser_session_end.",
-    inputSchema: { type: "object", properties: {} }
+    description: "Diagnostic snapshot of the bridge + active session: bridge mode, extension connectivity, current URL/origin, in-memory trace length, server uptime, MCP client count. Pass heal:true to also FIX common issues \u2014 re-attach a dropped debugger to every session tab and re-enable capture \u2014 instead of only reporting them. Use when something feels stuck before reaching for browser_session_end.",
+    inputSchema: { type: "object", properties: { heal: { type: "boolean", default: false, description: "Attempt to self-heal: re-attach the debugger to session tabs and re-enable console/network capture." } } }
   },
   {
     name: "browser_evaluate",
@@ -95632,13 +95634,14 @@ var tools = [
   },
   {
     name: "browser_console_messages",
-    description: "Recent browser console + uncaught exceptions for the active tab. Capture starts when the session attaches CDP (eagerly on session_start). Returns the last N messages, optionally filtered by level or timestamp. Pass clear=true to drain.",
+    description: "Recent browser console + uncaught exceptions for the active tab. Capture starts when the session attaches CDP (eagerly on session_start). Returns the last N messages, optionally filtered by level or timestamp. Pass sinceNavigation:true to scope to the CURRENT page (the fix for stale-buffer false 'no errors'). level:'error' includes uncaught exceptions. Pass clear=true to drain.",
     inputSchema: {
       type: "object",
       properties: {
         tabId: { type: "number" },
-        level: { type: "string", description: "Filter: log | info | warn | error | debug." },
+        level: { type: "string", description: "Filter: log | info | warn | error | debug. 'error' also includes pageerror/uncaught exceptions." },
         since: { type: "number", description: "Unix-ms timestamp; only messages at or after this are returned." },
+        sinceNavigation: { type: "boolean", default: false, description: "Only messages logged since the current page's last main-frame navigation. Use this before trusting 'no console errors' \u2014 a stale pre-navigation buffer otherwise reads as a clean bill of health." },
         limit: { type: "number", default: 100, description: "Max messages returned (capped at 500)." },
         clear: { type: "boolean", default: false, description: "Empty the buffer after returning." }
       }
@@ -95646,7 +95649,7 @@ var tools = [
   },
   {
     name: "browser_network_requests",
-    description: "Recent XHR / fetch / document / asset requests for the active tab. Returns method, URL, status, mime, duration, success/failure. Filter by URL substring, method, status range, or failedOnly. Body capture is opt-in via includeRequestHeaders / includeResponseHeaders.",
+    description: "Recent XHR / fetch / document / asset requests for the active tab. Returns method, URL, status, mime, duration, success/failure. Filter by URL substring, method, status range, failedOnly, or sinceNavigation. Error responses (>=400 / failed) include the captured response body automatically \u2014 so a 500 tells you WHY (e.g. 'SMTP not configured') instead of just that it failed. Headers are opt-in via includeRequestHeaders / includeResponseHeaders.",
     inputSchema: {
       type: "object",
       properties: {
@@ -95656,9 +95659,110 @@ var tools = [
         statusGte: { type: "number" },
         statusLt: { type: "number" },
         failedOnly: { type: "boolean", default: false, description: "Only requests that errored or returned >=400." },
+        sinceNavigation: { type: "boolean", default: false, description: "Only requests sent since the current page's last main-frame navigation." },
+        sinceMs: { type: "number", description: "Unix-ms floor; only requests sent at or after this. Used to capture only the requests an action triggered." },
+        includeBody: { type: "boolean", default: false, description: "Include captured response bodies for all returned requests (error bodies are always included)." },
         includeRequestHeaders: { type: "boolean", default: false },
         includeResponseHeaders: { type: "boolean", default: false },
         limit: { type: "number", default: 50, description: "Max entries returned (capped at 200)." }
+      }
+    }
+  },
+  {
+    name: "browser_assert_no_errors",
+    description: "One-call quality gate: fails if any console error / uncaught exception OR any >=400 / failed network response occurred since the current page loaded. Returns {ok, consoleErrors[], failedRequests[]}. Call this after every page load and every action \u2014 it turns 'looks fine' into a checked claim. The single highest-leverage guard against false 'all clear'.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number" },
+        sinceNavigation: { type: "boolean", default: true, description: "Scope to the current page (default). Set false to check the whole buffer." },
+        sinceMs: { type: "number", description: "Unix-ms floor instead of navigation scope (e.g. just before an action)." },
+        ignoreUrlContains: { type: "array", items: { type: "string" }, description: "Substrings of request URLs to ignore (known-noisy third-party calls)." }
+      }
+    }
+  },
+  {
+    name: "browser_audit_interactives",
+    description: "Enumerate EVERY actionable element on the page \u2014 buttons, links, inputs, selects, toggles, menu items, role-based controls. Returns {selector, tag, role, accessibleName, visible, inViewport, disabled, hasClickHandler, box} for each. This is the coverage backbone: you cannot honestly claim 'tested every control' without first listing the controls. hasClickHandler is a best-effort heuristic (content scripts can't see framework listeners).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number" },
+        scope: { type: "string", enum: ["all", "viewport"], default: "all", description: "all = whole document; viewport = only elements currently on screen." },
+        limit: { type: "number", default: 400, description: "Max elements returned (capped at 2000)." },
+        includeHidden: { type: "boolean", default: false, description: "Include elements that are not visible (display:none, zero-size)." }
+      }
+    }
+  },
+  {
+    name: "browser_act_and_observe",
+    description: "Perform one action (click / type / navigate / press_key / click_at) and return the OBSERVED EFFECT: new network requests + statuses, new console messages, URL change, and a DOM-change signal \u2014 plus a classification: WORKS (network 2xx and/or DOM/route change), NO-OP (clickable but nothing happened \u2014 a dead control, this is a defect), ERROR (console error or >=400 response), or NAVIGATES. One call answers 'did this actually do something, and was it an error?' \u2014 instead of inferring from a screenshot.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "object",
+          description: "The action to perform.",
+          properties: {
+            type: { type: "string", enum: ["click", "type", "navigate", "press_key", "click_at"] },
+            ref: { type: "string", description: "CSS selector for click/type." },
+            text: { type: "string", description: "Text for type." },
+            url: { type: "string", description: "URL for navigate." },
+            key: { type: "string", description: "Key for press_key." },
+            x: { type: "number" },
+            y: { type: "number" },
+            submit: { type: "boolean" },
+            clear: { type: "boolean" }
+          },
+          required: ["type"]
+        },
+        settleMs: { type: "number", default: 800, description: "How long to wait for network/DOM to settle after the action before measuring the delta (capped at 10000)." },
+        tabId: { type: "number" }
+      },
+      required: ["action"]
+    }
+  },
+  {
+    name: "browser_wait_for_response",
+    description: "Block until a network response matching {urlGlob | urlContains, method, status range} arrives, or time out. Turns 'did the save persist?' from inference into a fact. Checks already-captured requests first (handles the act-then-wait race), then waits on live events. Returns {matched, request:{url,status,...}} or {matched:false, reason:'timeout'}.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number" },
+        urlGlob: { type: "string", description: "Glob over the request URL, e.g. '*/api/save*'. * = any run, ? = one char." },
+        urlContains: { type: "string", description: "Substring of the request URL (alternative to urlGlob)." },
+        method: { type: "string", description: "GET, POST, etc. Case-insensitive." },
+        statusGte: { type: "number" },
+        statusLt: { type: "number" },
+        sinceMs: { type: "number", description: "Only consider requests sent at or after this Unix-ms (usually 'just before I clicked')." },
+        timeoutMs: { type: "number", default: 15e3, description: "Max wait (capped at 120000)." }
+      }
+    }
+  },
+  {
+    name: "browser_page_assets",
+    description: "List the loaded JS/CSS/document assets and hash each (SHA-256, fetched in-page so same-origin credentials apply). Returns {assets:[{url,type,sha256,bytes}], pageHash}. Confirm the live asset hash == your just-built/just-deployed hash BEFORE trusting QA results \u2014 this catches the 'you're looking at a stale cached bundle' class of confusion.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number" },
+        types: { type: "array", items: { type: "string", enum: ["script", "css", "document"] }, description: "Asset kinds to include. Default: all three." },
+        limit: { type: "number", default: 60, description: "Max assets (capped at 300)." },
+        hash: { type: "boolean", default: true, description: "Compute SHA-256 for each asset. Set false for a quick URL-only listing." }
+      }
+    }
+  },
+  {
+    name: "browser_set_storage",
+    description: "Seed localStorage / sessionStorage / cookies for deterministic auth and state. Re-seed a known-good token instead of fighting token expiry mid-run. localStorage/sessionStorage take a flat string\u2192value map; cookies take an array of {name,value,domain?,path?,secure?,httpOnly?,sameSite?,expires?}. Reload (browser_navigate hardReload) after seeding so the app re-reads it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        tabId: { type: "number" },
+        localStorage: { type: "object", description: "Map of key \u2192 value to set in localStorage.", additionalProperties: true },
+        sessionStorage: { type: "object", description: "Map of key \u2192 value to set in sessionStorage.", additionalProperties: true },
+        cookies: { type: "array", description: "Cookies to set via CDP.", items: { type: "object", properties: { name: { type: "string" }, value: { type: "string" }, domain: { type: "string" }, path: { type: "string" }, secure: { type: "boolean" }, httpOnly: { type: "boolean" }, sameSite: { type: "string", enum: ["Strict", "Lax", "None"] }, expires: { type: "number" } }, required: ["name", "value"] } },
+        clear: { type: "boolean", default: false, description: "Clear localStorage/sessionStorage before setting." }
       }
     }
   },
@@ -95983,6 +96087,10 @@ var TOOL_TO_WS_TYPE = {
   browser_evaluate: "evaluate",
   browser_console_messages: "console_messages",
   browser_network_requests: "network_requests",
+  browser_audit_interactives: "audit_interactives",
+  browser_wait_for_response: "wait_for_response",
+  browser_set_storage: "set_storage",
+  browser_page_assets: "page_assets",
   browser_upload_file: "upload_file"
 };
 async function handleToolCall(bridge2, params) {
@@ -95990,7 +96098,11 @@ async function handleToolCall(bridge2, params) {
   if (!memory) initToolsState();
   switch (name) {
     case "browser_session_health":
-      return jsonResult(toolSessionHealth(bridge2));
+      return jsonResult(await toolSessionHealth(bridge2, args));
+    case "browser_assert_no_errors":
+      return jsonResult(await toolAssertNoErrors(bridge2, args));
+    case "browser_act_and_observe":
+      return jsonResult(await toolActAndObserve(bridge2, args));
     case "browser_snapshot_query":
       return jsonResult(toolSnapshotQuery(args));
     case "browser_snapshot_node":
@@ -96161,8 +96273,16 @@ async function toolUploadStage(args = {}) {
 function currentClaudeSessionId() {
   return null;
 }
-function toolSessionHealth(bridge2) {
+async function toolSessionHealth(bridge2, args = {}) {
   const bridgeStatus = typeof bridge2.getStatus === "function" ? bridge2.getStatus() : null;
+  let healed = null;
+  if (args.heal && bridge2.isConnected()) {
+    try {
+      healed = await bridge2.send("session_heal", {});
+    } catch (e) {
+      healed = { error: String(e?.message ?? e) };
+    }
+  }
   return {
     mode: bridge2.mode ?? "uninitialized",
     connected: bridge2.isConnected(),
@@ -96175,8 +96295,116 @@ function toolSessionHealth(bridge2) {
     traceLength: trace.size?.() ?? 0,
     traceSessionId: trace.sessionId ?? null,
     serverUptimeMs: Date.now() - serverStartedAt,
+    ...healed ? { healed } : {},
     tip: !bridge2.isConnected() ? "Extension not connected. Make sure the Super-Tester Chrome extension is loaded and the toggle is ON." : !activeOrigin ? "No origin tracked yet. Call browser_navigate(url) to start a real page." : "Healthy."
   };
+}
+async function toolAssertNoErrors(bridge2, args = {}) {
+  const { tabId, sinceNavigation = true, sinceMs, ignoreUrlContains } = args;
+  const scope = {};
+  if (tabId != null) scope.tabId = tabId;
+  if (typeof sinceMs === "number") {
+    scope.since = sinceMs;
+    scope.sinceMs = sinceMs;
+  } else if (sinceNavigation) scope.sinceNavigation = true;
+  const ignores = Array.isArray(ignoreUrlContains) ? ignoreUrlContains : [];
+  const ignored = (url) => ignores.some((s) => (url || "").includes(s));
+  let navScopeUnavailable = false;
+  let consoleErrors = [];
+  try {
+    const c = await bridge2.send("console_messages", { ...scope, level: "error", limit: 50 });
+    if (c?.navScopeUnavailable) navScopeUnavailable = true;
+    consoleErrors = (c?.messages ?? []).map((m) => ({ text: redactMaybe(m.text), source: m.source, url: m.url, ts: m.ts }));
+  } catch (e) {
+    return { ok: false, error: `could not read console: ${String(e?.message ?? e)}` };
+  }
+  let failedRequests = [];
+  try {
+    const n = await bridge2.send("network_requests", { ...scope, failedOnly: true, limit: 50 });
+    if (n?.navScopeUnavailable) navScopeUnavailable = true;
+    failedRequests = (n?.requests ?? []).filter((r) => !ignored(r.url)).map((r) => ({ method: r.method, url: r.url, status: r.status, failed: r.failed, errorText: r.errorText, body: redactMaybe(r.body) }));
+  } catch (e) {
+    return { ok: false, error: `could not read network: ${String(e?.message ?? e)}` };
+  }
+  const ok = consoleErrors.length === 0 && failedRequests.length === 0;
+  const scopeLabel = typeof sinceMs === "number" ? "since the given timestamp" : scope.sinceNavigation ? "since navigation" : "in the buffer";
+  return {
+    ok,
+    sinceNavigation: scope.sinceNavigation ?? false,
+    // True when sinceNavigation was requested but the tab has no nav epoch yet,
+    // so this read was actually the whole buffer — don't trust "ok" blindly.
+    ...navScopeUnavailable ? { navScopeUnavailable: true } : {},
+    consoleErrorCount: consoleErrors.length,
+    failedRequestCount: failedRequests.length,
+    consoleErrors,
+    failedRequests,
+    summary: (navScopeUnavailable ? "[no navigation epoch yet \u2014 scoped to whole buffer] " : "") + (ok ? `No console errors or failed requests ${scopeLabel}.` : `${consoleErrors.length} console error(s), ${failedRequests.length} failed request(s) ${scopeLabel}.`)
+  };
+}
+async function toolActAndObserve(bridge2, args = {}) {
+  const action = args.action || {};
+  const type2 = action.type;
+  if (!type2) throw new Error("act_and_observe: action.type is required");
+  const tabId = args.tabId ?? action.tabId;
+  const settleMs = Math.max(0, Math.min(1e4, Number(args.settleMs) || 800));
+  const before = await probeDomState(bridge2, tabId);
+  const t0 = before && typeof before.now === "number" ? before.now : Date.now();
+  const toolName = `browser_${type2}`;
+  const actionArgs = { ...action };
+  delete actionArgs.type;
+  if (tabId != null) actionArgs.tabId = tabId;
+  let actionResult, actionError = null;
+  try {
+    actionResult = await runWireTool(bridge2, toolName, actionArgs);
+    if (actionResult && actionResult.ok === false) actionError = actionResult.reason || "action failed";
+  } catch (e) {
+    actionError = String(e?.message ?? e);
+  }
+  if (settleMs) await new Promise((r) => setTimeout(r, settleMs));
+  const after = await probeDomState(bridge2, tabId);
+  const scope = { sinceMs: t0, limit: 30 };
+  if (tabId != null) scope.tabId = tabId;
+  let networkDelta = [], consoleDelta = [];
+  try {
+    const n = await bridge2.send("network_requests", { ...scope });
+    networkDelta = (n?.requests ?? []).map((r) => ({ method: r.method, url: r.url, status: r.status, failed: r.failed, body: redactMaybe(r.body) }));
+  } catch {
+  }
+  try {
+    const c = await bridge2.send("console_messages", { tabId, since: t0, limit: 30 });
+    consoleDelta = (c?.messages ?? []).map((m) => ({ level: m.level, text: redactMaybe(m.text), source: m.source }));
+  } catch {
+  }
+  const urlChanged = !!before && !!after && before.url !== after.url;
+  const domChanged = !!before && !!after && (before.elementCount !== after.elementCount || before.bodyTextLen !== after.bodyTextLen || before.title !== after.title);
+  const had2xx = networkDelta.some((r) => typeof r.status === "number" && r.status >= 200 && r.status < 300);
+  const hadError = consoleDelta.some((m) => String(m.level).toLowerCase() === "error") || networkDelta.some((r) => r.failed || typeof r.status === "number" && r.status >= 400);
+  let classification;
+  if (actionError) classification = "ERROR";
+  else if (hadError) classification = "ERROR";
+  else if (urlChanged) classification = "NAVIGATES";
+  else if (had2xx || domChanged) classification = "WORKS";
+  else classification = "NO-OP";
+  return {
+    action: type2,
+    classification,
+    actionError: actionError || void 0,
+    urlChanged,
+    domChanged,
+    url: after?.url ?? before?.url ?? null,
+    networkDelta,
+    consoleDelta,
+    note: classification === "NO-OP" ? "Clickable but produced no network call, no DOM change, and no navigation \u2014 likely a dead control (defect)." : classification === "ERROR" ? "Action produced a console error and/or a >=400/failed response." : void 0
+  };
+}
+async function probeDomState(bridge2, tabId) {
+  try {
+    const expr = "(()=>({now:Date.now(),url:location.href,title:document.title,elementCount:document.getElementsByTagName('*').length,bodyTextLen:(document.body&&document.body.innerText||'').length}))()";
+    const r = await bridge2.send("evaluate", { expression: expr, awaitPromise: false, returnByValue: true, ...tabId != null ? { tabId } : {} });
+    return r?.value ?? null;
+  } catch {
+    return null;
+  }
 }
 function toolSnapshotQuery({
   snapshotId,
@@ -96307,18 +96535,22 @@ async function runWireTool(bridge2, name, args) {
     trace.reset();
     return result2;
   }
-  const {
-    intent: argIntent,
-    scope: argScope,
-    maxBytes: argMaxBytes,
-    redact: argRedact,
-    mode: argSnapshotMode,
-    maxDepth: argMaxDepth,
-    textLimit: argTextLimit,
-    includeBoxes: argIncludeBoxes,
-    store: argStore,
-    ...wireArgs
-  } = args;
+  const { intent: argIntent, ...rest } = args;
+  let wireArgs = rest;
+  let argScope, argMaxBytes, argRedact, argSnapshotMode, argMaxDepth, argTextLimit, argIncludeBoxes, argStore;
+  if (name === "browser_snapshot") {
+    ({
+      scope: argScope,
+      maxBytes: argMaxBytes,
+      redact: argRedact,
+      mode: argSnapshotMode,
+      maxDepth: argMaxDepth,
+      textLimit: argTextLimit,
+      includeBoxes: argIncludeBoxes,
+      store: argStore,
+      ...wireArgs
+    } = rest);
+  }
   let result;
   if (name === "browser_click" || name === "browser_type") {
     try {
@@ -96901,6 +97133,9 @@ function redactString(s) {
   let out = s;
   for (const re of SECRET_PATTERNS) out = out.replace(re, "[REDACTED]");
   return out;
+}
+function redactMaybe(s) {
+  return typeof s === "string" ? redactString(s) : s;
 }
 function redactTree(node) {
   if (!node) return node;

@@ -65,6 +65,18 @@ function readMeta(projectDir, id, archived) {
   try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; }
 }
 
+// Staleness signal: memory is point-in-time. A recalled claim that is >45 days
+// old should be re-verified against current code/live state before it's stated
+// as fact. ageDays is whole days since the link's ts (null ts -> 0, not stale).
+const STALE_AFTER_DAYS = 45;
+function ageInfo(ts) {
+  if (!ts) return { ageDays: 0, stale: false };
+  const t = Date.parse(ts);
+  if (Number.isNaN(t)) return { ageDays: 0, stale: false };
+  const ageDays = Math.max(0, Math.floor((Date.now() - t) / (24 * 60 * 60 * 1000)));
+  return { ageDays, stale: ageDays > STALE_AFTER_DAYS };
+}
+
 export function recall({
   projectDir,
   query,
@@ -115,6 +127,8 @@ export function recall({
 
     if (score === 0) continue;
 
+    const { ageDays, stale } = ageInfo(entry.ts);
+
     scored.push({
       id: entry.id,
       ts: entry.ts || null,
@@ -123,6 +137,8 @@ export function recall({
       archived: !!entry.archived,
       supersededBy: entry.supersededBy ?? null,
       score,
+      ageDays,
+      stale,
       matchedTags,
       matchedKeywords,
       summary: summary || "(summary file missing)",
@@ -150,6 +166,8 @@ export function formatRecallForHuman(result) {
   const lines = [];
   lines.push(`# Recall: "${result.query}"`);
   lines.push("");
+  lines.push(`_Memory is point-in-time. Any recalled claim that affects a decision must be re-verified against current code/live state before you state it as fact._`);
+  lines.push("");
   lines.push(`Scanned ${result.totalScanned} link${result.totalScanned === 1 ? "" : "s"} · ${result.hitCount} match${result.hitCount === 1 ? "" : "es"} · showing ${result.hits.length}`);
   lines.push("");
   if (result.hits.length === 0) {
@@ -164,6 +182,7 @@ export function formatRecallForHuman(result) {
     if (h.matchedTags.length) lines.push(`_matched tags:_ ${h.matchedTags.join(", ")}`);
     if (h.matchedKeywords.length) lines.push(`_matched keywords:_ ${h.matchedKeywords.join(", ")}`);
     if (h.commit) lines.push(`_commit:_ \`${String(h.commit).slice(0, 12)}\``);
+    if (h.stale) lines.push(`_⚠ ${h.ageDays}d old — re-verify against current code/live state before asserting as fact._`);
     lines.push("");
     lines.push(h.summary.trim());
     const refKeys = Object.keys(h.refs);

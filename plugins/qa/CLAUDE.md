@@ -12,6 +12,15 @@ When the user asks you to do a browser interaction, FIRST classify:
 - Has side effects on real infrastructure or external accounts.
 - Outcome isn't a clean pass/fail (you might need to backtrack and choose differently).
 
+## Exhaustive QA routing
+
+Requests like "click every button", "test everything", "make everything dynamic / nothing static", or "exhaustive QA" route to the `/qa` **exhaustive mode** (not a single dispatch). An exhaustive run MUST end behind the honesty gate:
+
+- Produce a coverage TABLE (every control + verdict + evidence) PLUS an explicit "did not verify / why" list — untestable items are reported as known gaps, never silently dropped.
+- Run the gate (`node "$(cat .continuum/.plugin-root)/../qa/lib/qa_coverage.js" --app <app>`); the run CANNOT be reported "pass" while any control is UNTESTED/UNCERTAIN (gate exit `2`). Never claim "everything works."
+- A control is only **WORKS** with evidence of effect — a 2xx and/or a DOM/route change. A clickable control that does nothing is a NO-OP defect.
+- Writes must be re-checked AFTER a reload for persistence: "UI updated" != "persisted".
+
 ## Routing rules
 
 1. Before any browser-leaning task, call `browser_playbook_match { url, intent, taskText }` to see if a playbook exists.

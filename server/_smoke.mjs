@@ -138,6 +138,93 @@ console.log("✓ click failure rich envelope:", {
   suggestion: failPayload.diagnostics.suggestion,
 });
 
+// ---- 0.5.0: browser_assert_no_errors composition ----
+const cleanBridge = {
+  ...realBridge,
+  send: async (type) => {
+    if (type === "console_messages") return { messages: [], total: 0 };
+    if (type === "network_requests") return { requests: [], total: 0 };
+    throw new Error("unexpected: " + type);
+  },
+};
+r = await handleToolCall(cleanBridge, { name: "browser_assert_no_errors", arguments: {} });
+let ane = JSON.parse(r.content[0].text);
+if (ane.ok !== true) { console.error("assert_no_errors should pass on clean page", ane); process.exit(1); }
+console.log("✓ assert_no_errors ok=true on a clean page");
+
+const dirtyBridge = {
+  ...realBridge,
+  send: async (type) => {
+    if (type === "console_messages") return { messages: [{ level: "error", text: "TypeError boom", source: "exception", ts: 2 }] };
+    if (type === "network_requests") return { requests: [{ method: "POST", url: "https://x/api/report", status: 500, failed: false, body: "SMTP not configured" }] };
+    throw new Error("unexpected: " + type);
+  },
+};
+r = await handleToolCall(dirtyBridge, { name: "browser_assert_no_errors", arguments: {} });
+ane = JSON.parse(r.content[0].text);
+if (ane.ok !== false || ane.consoleErrorCount !== 1 || ane.failedRequestCount !== 1) { console.error("assert_no_errors should fail", ane); process.exit(1); }
+if (!ane.failedRequests[0].body?.includes("SMTP")) { console.error("500 body not surfaced", ane); process.exit(1); }
+console.log("✓ assert_no_errors ok=false surfaces console error + 500 body:", ane.summary);
+
+r = await handleToolCall({
+  ...realBridge,
+  send: async (type) => {
+    if (type === "console_messages") return { messages: [] };
+    if (type === "network_requests") return { requests: [{ method: "GET", url: "https://analytics.example/track", status: 503, failed: false }] };
+    throw new Error("unexpected: " + type);
+  },
+}, { name: "browser_assert_no_errors", arguments: { ignoreUrlContains: ["analytics.example"] } });
+ane = JSON.parse(r.content[0].text);
+if (ane.ok !== true) { console.error("assert_no_errors should ignore noisy url", ane); process.exit(1); }
+console.log("✓ assert_no_errors honors ignoreUrlContains");
+
+// ---- 0.5.0: browser_act_and_observe classification ----
+function observeBridge({ click = "ok", net = [], cons = [], beforeUrl = "https://x/a", afterUrl = "https://x/a", beforeCount = 10, afterCount = 10 }) {
+  let evalCalls = 0;
+  return {
+    ...realBridge,
+    send: async (type, params) => {
+      if (type === "evaluate") {
+        evalCalls += 1;
+        const first = evalCalls === 1;
+        return { ok: true, type: "object", value: { url: first ? beforeUrl : afterUrl, title: "T", elementCount: first ? beforeCount : afterCount, bodyTextLen: 10 } };
+      }
+      if (type === "click") {
+        if (click === "throw") throw new Error("element not found: #x");
+        return { tabId: 1, ref: params.ref, url: beforeUrl, role: "button", name: "OK" };
+      }
+      if (type === "match_count") return { count: 0, samples: [] };
+      if (type === "screenshot") return { dataUrl: "data:image/jpeg;base64,xxx" };
+      if (type === "network_requests") return { requests: net };
+      if (type === "console_messages") return { messages: cons };
+      throw new Error("unexpected: " + type);
+    },
+  };
+}
+async function classify(cfg, actionArgs) {
+  const rr = await handleToolCall(observeBridge(cfg), { name: "browser_act_and_observe", arguments: { settleMs: 0, action: actionArgs } });
+  return JSON.parse(rr.content[0].text);
+}
+let ao = await classify({ net: [{ method: "POST", url: "https://x/api/save", status: 200 }], afterCount: 12 }, { type: "click", ref: "#save" });
+if (ao.classification !== "WORKS") { console.error("expected WORKS", ao); process.exit(1); }
+console.log("✓ act_and_observe → WORKS (2xx + DOM change)");
+ao = await classify({}, { type: "click", ref: "#dead" });
+if (ao.classification !== "NO-OP") { console.error("expected NO-OP", ao); process.exit(1); }
+console.log("✓ act_and_observe → NO-OP (dead control, no effect)");
+ao = await classify({ net: [{ method: "POST", url: "https://x/api/save", status: 500, failed: false }] }, { type: "click", ref: "#err" });
+if (ao.classification !== "ERROR") { console.error("expected ERROR", ao); process.exit(1); }
+console.log("✓ act_and_observe → ERROR (>=400 response)");
+ao = await classify({ beforeUrl: "https://x/a", afterUrl: "https://x/b" }, { type: "click", ref: "#nav" });
+if (ao.classification !== "NAVIGATES") { console.error("expected NAVIGATES", ao); process.exit(1); }
+console.log("✓ act_and_observe → NAVIGATES (URL changed)");
+
+// ---- 0.5.0: new tool schemas present ----
+for (const n of ["browser_assert_no_errors","browser_audit_interactives","browser_act_and_observe","browser_wait_for_response","browser_page_assets","browser_set_storage"]) {
+  const t = tools.find(x => x.name === n);
+  if (!t || t.inputSchema?.type !== "object") { console.error("missing/bad new tool:", n, t); process.exit(1); }
+}
+console.log("✓ all six 0.5.0 tools present with valid schemas");
+
 const sessionStart = tools.find(t => t.name === "browser_session_start");
 const v = sessionStart?.inputSchema?.properties?.visuals;
 if (!v || v.type !== "object") {

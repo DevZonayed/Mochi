@@ -87,23 +87,59 @@ function startFakeExtension() {
         };
         break;
       case "evaluate":
-        result = { tabId: 100, ok: true, type: "string", value: `evaluated:${params?.expression}`, url: "https://example.com/" };
+        // act_and_observe probes DOM state via an evaluate that reads
+        // location.href — return a structured object for that so the delta
+        // logic has something real to compare.
+        if (typeof params?.expression === "string" && params.expression.includes("location.href")) {
+          result = { tabId: 100, ok: true, type: "object", value: { url: "https://example.com/login", title: "Example", elementCount: 42, bodyTextLen: 100 }, url: "https://example.com/login" };
+        } else {
+          result = { tabId: 100, ok: true, type: "string", value: `evaluated:${params?.expression}`, url: "https://example.com/" };
+        }
         break;
-      case "console_messages":
+      case "audit_interactives":
         result = {
-          tabId: 100, captureActive: true, total: 2, returned: 2,
-          messages: [
-            { level: "log", text: "loaded", ts: Date.now() - 1000 },
-            { level: "error", text: "boom", ts: Date.now(), source: "exception" },
+          tabId: 100, url: "https://example.com/login", title: "Example",
+          scope: params?.scope ?? "all", totalVisible: 3, returned: 2, truncated: false,
+          elements: [
+            { selector: "#submit", tag: "button", role: "button", accessibleName: "Sign in", visible: true, inViewport: true, disabled: false, hasClickHandler: true, box: { x: 0, y: 0, w: 80, h: 30 } },
+            { selector: "#disabled-btn", tag: "button", role: "button", accessibleName: "Save", visible: true, inViewport: true, disabled: true, hasClickHandler: true, box: { x: 0, y: 40, w: 80, h: 30 } },
           ],
         };
         break;
-      case "network_requests":
+      case "wait_for_response":
+        result = { tabId: 100, matched: true, source: "event", request: { url: "https://example.com/api/save", status: 200, method: "POST" } };
+        break;
+      case "set_storage":
+        result = { tabId: 100, url: "https://example.com/login", localSet: 1, sessionSet: 0, cleared: false, cookies: [{ name: "token", success: true }] };
+        break;
+      case "page_assets":
         result = {
-          tabId: 100, captureActive: true, total: 1, returned: 1,
-          requests: [{ id: "1", method: "GET", url: "https://example.com/api", status: 200, mimeType: "application/json", durationMs: 42, finished: true, failed: false }],
+          tabId: 100, url: "https://example.com/login", count: 2, returned: 2, pageHash: "abc123",
+          assets: [
+            { url: "https://example.com/app.js", type: "script", sha256: "deadbeef", bytes: 1234, status: 200 },
+            { url: "https://example.com/app.css", type: "css", sha256: "cafef00d", bytes: 567, status: 200 },
+          ],
         };
         break;
+      case "session_heal":
+        result = { sessionId: "sess-test", primaryTabId: 100, healedTabs: [{ tabId: 100, attached: true }] };
+        break;
+      case "console_messages": {
+        let msgs = [
+          { level: "log", text: "loaded", ts: Date.now() - 1000 },
+          { level: "error", text: "boom", ts: Date.now(), source: "exception" },
+        ];
+        if (params?.level) msgs = msgs.filter((m) => m.level === params.level);
+        result = { tabId: 100, captureActive: true, total: msgs.length, returned: msgs.length, sinceNavigation: !!params?.sinceNavigation, messages: msgs };
+        break;
+      }
+      case "network_requests": {
+        let reqs = [{ id: "1", method: "GET", url: "https://example.com/api", status: 200, mimeType: "application/json", durationMs: 42, finished: true, failed: false }];
+        if (params?.failedOnly) reqs = reqs.filter((r) => r.failed || (r.status >= 400));
+        if (params?.urlContains) reqs = reqs.filter((r) => r.url.includes(params.urlContains));
+        result = { tabId: 100, captureActive: true, total: reqs.length, returned: reqs.length, sinceNavigation: !!params?.sinceNavigation, requests: reqs };
+        break;
+      }
       case "screenshot":
         result = { tabId: 100, mode: "viewport", dataUrl: "data:image/jpeg;base64,Zm9v" };
         break;
@@ -192,7 +228,7 @@ async function main() {
   logStep("Listing tools");
   const tools = await client.listTools();
   const names = tools.tools.map((t) => t.name);
-  assertEq("total tool count", names.length, 54);
+  assertEq("total tool count", names.length, 60);
   for (const n of [
     "browser_session_health",
     "browser_evaluate",
@@ -274,10 +310,48 @@ async function main() {
   assertEq("happy click ref", clickOk.ref, "button.ok");
   assertOk("happy click no diagnostics", clickOk.diagnostics === undefined);
 
+  // ----- 9b) 0.5.0 QA primitives -----
+  logStep("Calling browser_audit_interactives");
+  const audit = parsePayload(await client.callTool({ name: "browser_audit_interactives", arguments: { scope: "all" } }));
+  assertOk("audit returned elements", Array.isArray(audit.elements) && audit.elements.length === 2, audit);
+  assertOk("audit flags disabled control", audit.elements.some((e) => e.disabled === true), audit);
+  const auditCall = ext.calls.find((c) => c.type === "audit_interactives");
+  assertEq("audit scope forwarded", auditCall?.params?.scope, "all");
+
+  logStep("Calling browser_wait_for_response");
+  const waited = parsePayload(await client.callTool({ name: "browser_wait_for_response", arguments: { urlGlob: "*/api/save*", method: "POST" } }));
+  assertOk("wait matched", waited.matched === true, waited);
+  assertEq("wait status", waited.request.status, 200);
+
+  logStep("Calling browser_assert_no_errors (composition)");
+  const noErr = parsePayload(await client.callTool({ name: "browser_assert_no_errors", arguments: {} }));
+  assertOk("assert_no_errors flags the console error", noErr.ok === false, noErr);
+  assertEq("one console error counted", noErr.consoleErrorCount, 1);
+  assertEq("no failed requests counted", noErr.failedRequestCount, 0);
+
+  logStep("Calling browser_act_and_observe (composition)");
+  const observed = parsePayload(await client.callTool({ name: "browser_act_and_observe", arguments: { action: { type: "click", ref: "button.ok" }, settleMs: 0 } }));
+  assertOk("act_and_observe classified", ["WORKS", "NO-OP", "ERROR", "NAVIGATES"].includes(observed.classification), observed);
+  assertOk("act_and_observe returns deltas", Array.isArray(observed.networkDelta) && Array.isArray(observed.consoleDelta), observed);
+
+  logStep("Calling browser_page_assets");
+  const assets = parsePayload(await client.callTool({ name: "browser_page_assets", arguments: {} }));
+  assertOk("page_assets returned assets", Array.isArray(assets.assets) && assets.assets.length === 2, assets);
+  assertEq("page_assets pageHash", assets.pageHash, "abc123");
+
+  logStep("Calling browser_set_storage");
+  const stored = parsePayload(await client.callTool({ name: "browser_set_storage", arguments: { localStorage: { token: "abc" }, cookies: [{ name: "token", value: "abc" }] } }));
+  assertEq("set_storage localSet", stored.localSet, 1);
+  assertOk("set_storage cookie set", stored.cookies?.[0]?.success === true, stored);
+
+  logStep("Calling browser_session_health with heal:true");
+  const healed = parsePayload(await client.callTool({ name: "browser_session_health", arguments: { heal: true } }));
+  assertOk("session_health healed", !!healed.healed && Array.isArray(healed.healed.healedTabs), healed);
+
   // ----- 10) Confirm wire types the broker actually forwarded -----
   logStep("Verifying wire types reached the fake extension");
   const types = ext.calls.map((c) => c.type);
-  for (const expected of ["session_start", "navigate", "evaluate", "console_messages", "network_requests", "snapshot", "text", "links", "click"]) {
+  for (const expected of ["session_start", "navigate", "evaluate", "console_messages", "network_requests", "snapshot", "text", "links", "click", "audit_interactives", "wait_for_response", "page_assets", "set_storage", "session_heal"]) {
     assertOk(`extension received: ${expected}`, types.includes(expected));
   }
 

@@ -4,8 +4,9 @@ server/node_modules/
 server/.DS_Store
 .super-tester/
 server/.super-tester/
+server/.continuum/
 exports/
-mcp/
+/mcp/
 
 # Local env / secrets — never commit
 .env
@@ -24,3 +25,9 @@ mcp/
 coverage/
 
 .continuum/secrets/
+# Transient browser-MCP caches written into the repo's own .continuum by test
+# runs (the chain itself — chain/, STATE.md — stays tracked).
+.continuum/selectors/
+.continuum/runs/
+.continuum/verification/
+.continuum/.env-provenance.json

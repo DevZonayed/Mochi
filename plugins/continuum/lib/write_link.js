@@ -13,8 +13,36 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { paths, estimateTokens } from "./paths.js";
+
+// Continuum plugin root (the dir holding lib/), derived from this module's URL
+// so it works whether the plugin is bundled or loaded standalone.
+const CONTINUUM_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// Best-effort provenance for a written link: which server bundle was live and
+// which plugin version produced it. Both are wrapped so a missing/unreadable
+// file just yields null — never throws, never blocks a checkpoint.
+function readProvenance() {
+  let bundle_hash = null;
+  let plugin_version = null;
+  try {
+    const bundlePath = path.resolve(CONTINUUM_ROOT, "../../server/dist/server.bundle.mjs");
+    if (fs.existsSync(bundlePath)) {
+      bundle_hash = crypto.createHash("sha256").update(fs.readFileSync(bundlePath)).digest("hex");
+    }
+  } catch {}
+  try {
+    const pluginJsonPath = path.resolve(CONTINUUM_ROOT, "../../.claude-plugin/plugin.json");
+    if (fs.existsSync(pluginJsonPath)) {
+      const pj = JSON.parse(fs.readFileSync(pluginJsonPath, "utf8"));
+      plugin_version = pj.version ?? null;
+    }
+  } catch {}
+  return { bundle_hash, plugin_version };
+}
 
 function parseArgs(argv) {
   const args = {};
@@ -88,6 +116,8 @@ async function main() {
   const parent = (args.parent && args.parent !== "null") ? Number(args.parent) : (id > 1 ? id - 1 : null);
   const summaryTokens = estimateTokens(summary);
 
+  const { bundle_hash, plugin_version } = readProvenance();
+
   fs.writeFileSync(path.join(linkDir, "summary.md"), summary + "\n");
   fs.writeFileSync(path.join(linkDir, "refs.json"), JSON.stringify(refs, null, 2) + "\n");
   fs.writeFileSync(path.join(linkDir, "meta.json"), JSON.stringify({
@@ -95,6 +125,8 @@ async function main() {
     parent_link: parent,
     created_at: ts,
     model: process.env.CLAUDE_MODEL || null,
+    bundle_hash,
+    plugin_version,
   }, null, 2) + "\n");
 
   const indexEntry = { id, ts, commit, summary_tokens: summaryTokens, tags };

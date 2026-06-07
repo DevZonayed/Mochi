@@ -66,7 +66,7 @@ That's it for the plugin. Then load the Chrome extension once:
 
 ```text
 chrome://extensions → Developer mode → Load unpacked → select
-  ~/.claude/plugins/cache/mochi/mochi/0.4.1/extension
+  ~/.claude/plugins/cache/mochi/mochi/0.5.0/extension
 ```
 
 Restart Claude Code. Press **⌘⇧M** (macOS) or **Ctrl+Shift+M** (other) on
@@ -136,7 +136,7 @@ at the same time — pick one.
 
 ## Tools (MCP)
 
-54 tools, grouped by purpose.
+60 tools, grouped by purpose.
 
 ### Session + tabs
 
@@ -180,6 +180,38 @@ at the same time — pick one.
 | Tool | What it does |
 |---|---|
 | `browser_assert` | Verify `url-contains`, `url-equals`, `title-contains`, `element-exists`, `element-missing`, `text-contains`, `text-equals`. Returns `{ok, got}`. |
+
+### QA truth & coverage (0.5.0)
+
+The verdict-driven core of an exhaustive QA pass. **Render != Works:** a control
+that paints on screen is not a verified control. These tools enumerate every
+actionable element, drive each one, and prove what actually happened.
+
+| Tool | What it's for |
+|---|---|
+| `browser_audit_interactives` | Enumerate every actionable control on the page (`scope:"all"\|"viewport"`, `limit`, `includeHidden`). The coverage backbone — returns `{selector, role, accessibleName, visible, inViewport, disabled, hasClickHandler, box}` per element so nothing goes UNTESTED. |
+| `browser_act_and_observe` | Perform one action (`click`/`type`/`navigate`/`press_key`/`click_at`) and classify the result: `WORKS` / `NO-OP` / `ERROR` / `NAVIGATES`. A `NO-OP` (clickable but nothing changed) is a **dead control = defect**. Returns `urlChanged`, `domChanged`, `networkDelta`, `consoleDelta`. |
+| `browser_assert_no_errors` | One-call health gate: `ok=false` if **any** console error/uncaught exception **or** any `>=400`/failed request happened since the page loaded (`sinceNavigation` default, or `sinceMs`, with `ignoreUrlContains`). Failed-request entries include `.body`. |
+| `browser_wait_for_response` | Block until a matching network response arrives (`urlGlob`/`urlContains`, `method`, `statusGte`/`statusLt`, `timeoutMs`). Proves a write actually persisted instead of guessing from the UI. |
+| `browser_page_assets` | Hash the live page assets (`script`/`css`/`document`) with sha256 + a `pageHash`. Confirm the **live bundle hash == the built hash** so you never test a stale cached deploy. |
+| `browser_set_storage` | Deterministic auth/state seeding — set `localStorage`, `sessionStorage`, and `cookies` (or `clear`) in one call so a flow starts from a known logged-in state. |
+
+**Enhancements to existing tools in 0.5.0:**
+
+- `browser_navigate` now accepts `hardReload` (cache-bypass load) and
+  `disableCache` (persist cache-off for the tab) — pair with `browser_page_assets`
+  to defeat stale bundles.
+- `browser_console_messages` accepts `sinceNavigation:true` to scope to the
+  current page (the fix for a stale pre-navigation buffer reading as a false
+  "no errors"); `level:"error"` includes uncaught exceptions.
+- `browser_network_requests` accepts `sinceNavigation`, `sinceMs`, and
+  `includeBody`; error responses (`>=400`/failed) include the captured response
+  body automatically, so an "Internal server error" tells you *why* (e.g. SMTP
+  misconfig) instead of guessing.
+- `browser_click` now reports disabled controls (fails loudly with "element is
+  disabled" rather than silently passing) and retries a transient not-found once.
+- `browser_session_health` accepts `heal:true` to re-attach the debugger to
+  session tabs.
 
 ### File uploads
 
@@ -291,14 +323,47 @@ browser_click {ref, intent:"…"}    ← intent caches the selector
 
 ### Resize vs. emulate — when to use which
 
+**Read this carefully — these two tools are NOT interchangeable:**
+
+- **`browser_emulate_viewport` changes the page's real JS layout.** It drives CDP
+  `Emulation.setDeviceMetricsOverride`, so it **does** change
+  `window.innerWidth` / `window.innerHeight` and **does** flip `matchMedia` /
+  CSS media queries. **This is the tool you use for responsive and media-query
+  testing** — breakpoints, mobile layouts, `@media` rules all respond to it.
+- **`browser_window_resize` only moves/sizes the OS-level Chrome window.** It
+  does **NOT** affect `window.innerWidth` or `matchMedia` — the page's JS layout
+  is unchanged. Use it only when you genuinely need real OS window dimensions
+  (e.g. screenshotting the full chrome of a large monitor).
+
+> A common past mistake was conflating the two — or assuming `emulate_viewport`
+> "only affects screenshots." It does not; it changes JS layout.
+
 | Goal                                                         | Tool                                              |
 | ------------------------------------------------------------ | ------------------------------------------------- |
-| Test a real responsive layout at iPhone size                 | `browser_emulate_viewport {preset:"iphone-15-pro"}` (no window change, includes touch + UA) |
-| Test how the UI behaves at a real 2560×1440 monitor          | `browser_window_resize {width:2560, height:1440}` (only safe in a session-owned window)      |
-| Verify a layout breakpoint at exactly 768px wide             | `browser_emulate_viewport {width:768, height:1024}` |
+| Test a real responsive layout at iPhone size                 | `browser_emulate_viewport {preset:"iphone-15-pro"}` (changes `innerWidth`/`matchMedia`, includes touch + UA) |
+| Verify a layout breakpoint at exactly 768px wide             | `browser_emulate_viewport {width:768, height:1024}` (media queries respond) |
+| Test how the OS window behaves at a real 2560×1440 monitor   | `browser_window_resize {width:2560, height:1440}` (only safe in a session-owned window; JS layout unchanged) |
 | Reset back to native                                         | `browser_clear_emulation`                          |
 
-`emulate_viewport` is preferred — it's deterministic, doesn't disturb anything else, and matches what Chrome DevTools' Device Mode does. `window_resize` is for when you genuinely need real OS-level window dimensions.
+`emulate_viewport` is preferred for layout/responsive testing — it's
+deterministic, doesn't disturb anything else, matches Chrome DevTools' Device
+Mode, and actually changes what the page's JavaScript sees. `window_resize` is
+for when you genuinely need real OS-level window dimensions.
+
+### Exhaustive QA coverage mode
+
+Beyond one-off checks, Mochi can run an **exhaustive QA pass** (`/qa exhaustive`)
+that enumerates every actionable control with `browser_audit_interactives`,
+drives each one through `browser_act_and_observe`, gates every page and action
+with `browser_assert_no_errors`, and assigns one of five verdicts to each
+control: **WORKS**, **NO-OP** (defect), **ERROR** (defect), **NAVIGATES**, or
+**DISABLED**. Results are recorded in a **verification ledger** with
+provenance stamping, and a built-in **honesty gate** refuses to report a run as
+"pass" while any control is still UNTESTED/UNCERTAIN — the rule is never "everything
+works" but *"N of M controls verified — here is each result, and here is what I
+could NOT verify and why."* Hard-won tooling quirks live in a persistent
+[tooling-gotchas note](skills/browser/references/gotchas.md) so they're never
+re-learned.
 
 ## Memory model
 
