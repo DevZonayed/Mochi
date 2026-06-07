@@ -640,6 +640,47 @@ import('$PLUGIN_DIR/lib/comms_allowlist.js').then((m) => {
 ")
 echo "$T37_OUT" | grep -qF "ALLOW OK" && ok "comms_allowlist normalize/isAllowed/group-grant" || { fail "comms_allowlist: $T37_OUT"; }
 
+# ---- T38: comms_dedupe fingerprint — symmetric, no ordinal -----------------
+echo
+echo "T38 — comms_dedupe fingerprint symmetry (§4.2)"
+T38_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/comms_dedupe.js').then((m) => {
+  let bad = 0;
+  const eq = (a,b,label) => { if (a!==b) { console.log('FAIL',label,'got',a,'want',b); bad++; } };
+  const ne = (a,b,label) => { if (a===b) { console.log('FAIL',label,'unexpectedly equal',a); bad++; } };
+
+  // shape: 'fp:' + 40 hex chars (sha1)
+  const live = { chatId:'c@g.us', ts:1717700000, senderId:'19999999999@s.whatsapp.net', text:'ok', source:'live', msgId:'3EB0', media:null };
+  const fp = m.fingerprint(live);
+  eq(/^fp:[0-9a-f]{40}$/.test(fp), true, 'fp-shape');
+
+  // SYMMETRIC: a live record and an import record of the same content+minute+
+  // sender produce the SAME fingerprint (no ordinal, no msgId, no source).
+  const imp = { chatId:'c@g.us', ts:1717700030, senderId:'19999999999@s.whatsapp.net', text:'ok', source:'import', msgId:'import:abc', media:null };
+  eq(m.fingerprint(imp), fp, 'live-import-symmetric-same-minute');
+
+  // sender is normalized before hashing (device suffix doesn't fork identity)
+  const withDevice = { ...live, senderId:'19999999999:7@s.whatsapp.net' };
+  eq(m.fingerprint(withDevice), fp, 'sender-normalized-into-fp');
+
+  // different minute -> different fp
+  const nextMin = { ...live, ts: 1717700000 + 60 };
+  ne(m.fingerprint(nextMin), fp, 'minute-bucketed');
+
+  // different text -> different fp
+  ne(m.fingerprint({ ...live, text:'nope' }), fp, 'text-sensitive');
+
+  // media path: text empty, fingerprint uses media.mediaKey when present
+  const med = { chatId:'c@g.us', ts:1717700000, senderId:'19999999999@s.whatsapp.net', text:'', media:{ mediaKey:'KEY1' }, source:'live', msgId:'x' };
+  const med2 = { ...med, source:'import', msgId:'import:y' };
+  eq(m.fingerprint(med), m.fingerprint(med2), 'media-key-symmetric');
+  ne(m.fingerprint(med), fp, 'media-vs-text-differ');
+
+  console.log(bad === 0 ? 'FP OK' : 'FP BAD ' + bad);
+});
+")
+echo "$T38_OUT" | grep -qF "FP OK" && ok "comms_dedupe fingerprint symmetric + no-ordinal" || { fail "comms_dedupe fp: $T38_OUT"; }
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
