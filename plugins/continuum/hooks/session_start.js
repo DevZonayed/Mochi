@@ -189,22 +189,46 @@ async function main() {
     fs.mkdirSync(p.root, { recursive: true });
     if (sessionId) fs.writeFileSync(p.sessionIdFile, sessionId);
     fs.writeFileSync(path.join(p.root, ".plugin-root"), CONTINUUM_ROOT);
-    // Protective .gitignore (idempotent): the verification ledger, provenance,
-    // uploads, runs and screenshots can contain page-derived data (control
-    // labels, response bodies, secrets seeded for testing) and should not be
-    // committed. The chain itself (chain/, STATE.md) is intentionally NOT ignored.
+    // Protective .gitignore (idempotent APPENDER — B2 fix): the verification
+    // ledger, provenance, uploads, runs and screenshots can contain page-derived
+    // data (control labels, response bodies, secrets seeded for testing); the
+    // comms/ tree holds WhatsApp auth creds + private messages. None of it may be
+    // committed. The chain (chain/, STATE.md) and comms/config.json are
+    // intentionally tracked. This MUST append missing lines to an existing
+    // .gitignore (not just create-if-absent), so repos bootstrapped before comms
+    // shipped still gain the comms ignores. Paths are relative to .continuum/.
     const giPath = path.join(p.root, ".gitignore");
-    if (!fs.existsSync(giPath)) {
-      fs.writeFileSync(giPath, [
-        "# Auto-written by continuum. Transient / page-derived data — do not commit.",
-        "# The chain (chain/, STATE.md) is intentionally tracked and NOT ignored.",
-        "verification/",
-        "runs/",
-        "uploads/",
-        "screenshots/",
-        ".env-provenance.json",
-        "",
-      ].join("\n"));
+    const giHeader = [
+      "# Auto-written by continuum. Transient / page-derived data — do not commit.",
+      "# The chain (chain/, STATE.md) and comms/config.json are intentionally tracked.",
+    ];
+    const giWanted = [
+      "verification/",
+      "runs/",
+      "uploads/",
+      "screenshots/",
+      ".env-provenance.json",
+      "comms/*",
+      "!comms/config.json",
+    ];
+    let giExisting = [];
+    try {
+      if (fs.existsSync(giPath)) {
+        giExisting = fs.readFileSync(giPath, "utf8").split("\n");
+      }
+    } catch {}
+    const giHave = new Set(giExisting.map((l) => l.trim()));
+    if (giExisting.length === 0) {
+      // Fresh file: header + all wanted lines + trailing newline.
+      fs.writeFileSync(giPath, [...giHeader, ...giWanted, ""].join("\n"));
+    } else {
+      // Existing file: append only the wanted lines that are missing.
+      const toAdd = giWanted.filter((l) => !giHave.has(l));
+      if (toAdd.length > 0) {
+        const base = fs.readFileSync(giPath, "utf8");
+        const sep = base.endsWith("\n") || base.length === 0 ? "" : "\n";
+        fs.writeFileSync(giPath, base + sep + toAdd.join("\n") + "\n");
+      }
     }
   } catch {}
 
