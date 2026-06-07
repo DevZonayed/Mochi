@@ -1,6 +1,16 @@
 // server/_comms_bundle_smoke.test.mjs
 // GATING (spec §12): comms.bundle.mjs builds, boots under bare node, lists tools over stdio;
-// pinned baileys subtree is pure-JS (no *.node, no install scripts).
+// baileys own package is pure-JS (no *.node, no native install scripts).
+//
+// NOTE on native-addon coverage: the bare-node boot test (steps b/c) is the primary runtime
+// guarantee — it runs the bundle from a genuinely bare tmp dir (no node_modules in any parent
+// of os.tmpdir()), so a successful initialize+tools/list proves the bundle needs no native
+// addon at boot time. The pure-JS scan below (step d) covers only baileys' own package files
+// (~362 files under @whiskeysockets/baileys); baileys' transitive deps (sharp, libsignal,
+// pino, protobufjs, ws, axios …) are flat-hoisted to the top-level server/node_modules and
+// are NOT walked here. esbuild inlines sharp's native-binding loader into the bundle, but that
+// path is never executed under bare node (sharp is not required at MCP tool-list time), which
+// is why the boot test remains the authoritative "no native addon at runtime" check.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -105,7 +115,11 @@ async function listToolsOverStdio() {
   }
 }
 
-// ── (d) pure-JS assertion for the pinned baileys subtree ─────────────────────
+// ── (d) pure-JS assertion for baileys' own package (NOT its hoisted transitive deps) ──────
+// Scope: this scan covers only the files directly under @whiskeysockets/baileys (~362 files).
+// Baileys' transitive deps are flat-hoisted to server/node_modules and are not walked here.
+// The authoritative "no native addon needed at runtime" guarantee is the bare-node boot test
+// above (steps b/c) — see the file header for the full explanation.
 {
   const baileysDir = path.join(serverDir, "node_modules", "@whiskeysockets", "baileys");
   assert.ok(fs.existsSync(baileysDir), "baileys must be installed for the pure-JS scan");
@@ -114,7 +128,7 @@ async function listToolsOverStdio() {
   const bpkg = JSON.parse(fs.readFileSync(path.join(baileysDir, "package.json"), "utf8"));
   assert.equal(bpkg.version, "6.7.23", "baileys must be pinned to 6.7.23");
 
-  // no prebuilt native addons anywhere in the baileys subtree
+  // no prebuilt native addons in baileys' own package files
   const nodeAddons = [];
   const nativeInstallScriptPkgs = [];
   // These keywords indicate native-compilation install scripts (node-gyp, binding.gyp, etc.).
@@ -145,8 +159,8 @@ async function listToolsOverStdio() {
   };
   walk(baileysDir);
 
-  assert.equal(nodeAddons.length, 0, `pinned baileys subtree must contain no *.node addons; found:\n${nodeAddons.join("\n")}`);
-  assert.equal(nativeInstallScriptPkgs.length, 0, `pinned baileys subtree must have no native-compilation install scripts; found:\n${nativeInstallScriptPkgs.join("\n")}`);
+  assert.equal(nodeAddons.length, 0, `baileys own package must contain no *.node addons; found:\n${nodeAddons.join("\n")}`);
+  assert.equal(nativeInstallScriptPkgs.length, 0, `baileys own package must have no native-compilation install scripts; found:\n${nativeInstallScriptPkgs.join("\n")}`);
 }
 
-console.log("✓ comms bundle smoke: builds, boots under bare node, lists tools, pure-JS (spec §12)");
+console.log("✓ comms bundle smoke: builds, boots under bare node, lists tools, baileys pure-JS (spec §12)");
