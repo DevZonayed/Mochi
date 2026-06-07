@@ -589,6 +589,45 @@ import('$PLUGIN_DIR/lib/comms_config.js').then((m) => {
 echo "$T36_OUT" | grep -qF "CONFIG OK" && ok "comms_config merge/defaults/decline/atomic" || { fail "comms_config: $T36_OUT"; }
 rm -rf "$CFG_REPO"
 
+# ---- T37: comms_allowlist normalize + strict isAllowed + group grant -------
+echo
+echo "T37 — comms_allowlist normalizeJid + isAllowed + group grant"
+T37_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/comms_allowlist.js').then((m) => {
+  let bad = 0;
+  const eq = (a,b,label) => { if (JSON.stringify(a)!==JSON.stringify(b)) { console.log('FAIL',label,'got',JSON.stringify(a),'want',JSON.stringify(b)); bad++; } };
+
+  // normalizeJid: strip device/agent suffix, lowercase, trim. @lid passes
+  // through untouched in v1 (the real LID<->phone map is provider-side, v2).
+  eq(m.normalizeJid(' 19999999999:12@s.whatsapp.net '), '19999999999@s.whatsapp.net', 'strip-device-and-trim');
+  eq(m.normalizeJid('123-456@g.us'), '123-456@g.us', 'group-jid-untouched');
+  eq(m.normalizeJid('44777@LID'), '44777@lid', 'lid-lowercased-stub');
+  eq(m.normalizeJid(''), '', 'empty');
+  eq(m.normalizeJid(null), '', 'null');
+
+  // isAllowed: strict — only chats on this account's allowed_jids, normalized.
+  const cfg = { version:1, decided:true, declined:false, providers:{ whatsapp:{ accounts:{
+    work:{ capture:'session', mode:'strict', allowed_jids:['123-456@g.us', '19999999999@s.whatsapp.net'] }
+  }}}};
+  eq(m.isAllowed(cfg,'whatsapp','work','123-456@g.us'), true, 'allowed-group');
+  eq(m.isAllowed(cfg,'whatsapp','work','19999999999:5@s.whatsapp.net'), true, 'allowed-dm-with-device');
+  eq(m.isAllowed(cfg,'whatsapp','work','55500000@s.whatsapp.net'), false, 'not-on-list');
+  // group-grant semantics §6.4: allowing the group does NOT allow a member's 1:1
+  eq(m.isAllowed(cfg,'whatsapp','work','member999@s.whatsapp.net'), false, 'group-does-not-grant-member-dm');
+  // unknown provider/account -> false (never throws)
+  eq(m.isAllowed(cfg,'telegram','work','x@s.whatsapp.net'), false, 'unknown-provider');
+  eq(m.isAllowed(cfg,'whatsapp','nope','123-456@g.us'), false, 'unknown-account');
+
+  // assertAllowed: returns normalized jid when allowed, throws when not.
+  eq(m.assertAllowed(cfg,'whatsapp','work','123-456@g.us'), '123-456@g.us', 'assert-returns-normalized');
+  let threw = false; try { m.assertAllowed(cfg,'whatsapp','work','nope@s.whatsapp.net'); } catch { threw = true; }
+  eq(threw, true, 'assert-throws-when-denied');
+
+  console.log(bad === 0 ? 'ALLOW OK' : 'ALLOW BAD ' + bad);
+});
+")
+echo "$T37_OUT" | grep -qF "ALLOW OK" && ok "comms_allowlist normalize/isAllowed/group-grant" || { fail "comms_allowlist: $T37_OUT"; }
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
