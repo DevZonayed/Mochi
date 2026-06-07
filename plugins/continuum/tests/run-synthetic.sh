@@ -1244,6 +1244,7 @@ C55REPO="$(mktemp -d -t continuum-synth-c55.XXXXXX)"
 mkdir -p "$C55REPO/.continuum/comms"
 T55_OUT=$(node -e "
 import('$PLUGIN_DIR/lib/comms_state.js').then((m) => {
+  const fs = require('node:fs');
   const d = '$C55REPO';
   // MCP writes link status:
   m.setAccountStatus(d, 'whatsapp', 'work', 'connected');
@@ -1263,8 +1264,30 @@ import('$PLUGIN_DIR/lib/comms_state.js').then((m) => {
   const emptySt = m.readState('/tmp/no-such-dir-c55');
   const emptySeen = m.readSeen('/tmp/no-such-dir-c55');
   const empty_ok = JSON.stringify(emptySt)==='{}' && JSON.stringify(emptySeen)==='{}';
-  console.log((status_ok && flat_ok && seen_ok && empty_ok) ? 'STATE OK'
-    : 'STATE BAD st='+status_ok+' flat='+flat_ok+' seen='+seen_ok+' empty='+empty_ok);
+  // fault-tolerance: invalid JSON in state.json degrades to {} (catch branch):
+  const stPath = d + '/.continuum/comms/state.json';
+  const seenPath = d + '/.continuum/comms/.last-session-seen.json';
+  fs.writeFileSync(stPath, 'THIS IS NOT JSON');
+  const badJsonSt = m.readState(d);
+  const badJsonSt_ok = JSON.stringify(badJsonSt) === '{}';
+  fs.writeFileSync(seenPath, 'THIS IS NOT JSON');
+  const badJsonSeen = m.readSeen(d);
+  const badJsonSeen_ok = JSON.stringify(badJsonSeen) === '{}';
+  // fault-tolerance: array JSON in state.json / seen degrades to {} (array guard):
+  fs.writeFileSync(stPath, '[1,2,3]');
+  const arraySt = m.readState(d);
+  const arraySt_ok = JSON.stringify(arraySt) === '{}';
+  // accountStatuses on array-fallback {} must yield an empty list (no garbage):
+  const arrayFlat = m.accountStatuses(arraySt);
+  const arrayFlat_ok = arrayFlat.length === 0;
+  fs.writeFileSync(seenPath, '[1,2,3]');
+  const arraySeen = m.readSeen(d);
+  const arraySeen_ok = JSON.stringify(arraySeen) === '{}';
+  const fault_ok = badJsonSt_ok && badJsonSeen_ok && arraySt_ok && arrayFlat_ok && arraySeen_ok;
+  console.log((status_ok && flat_ok && seen_ok && empty_ok && fault_ok) ? 'STATE OK'
+    : 'STATE BAD st='+status_ok+' flat='+flat_ok+' seen='+seen_ok+' empty='+empty_ok+' fault='+fault_ok
+      +' badJsonSt='+badJsonSt_ok+' badJsonSeen='+badJsonSeen_ok
+      +' arraySt='+arraySt_ok+' arrayFlat='+arrayFlat_ok+' arraySeen='+arraySeen_ok);
 }).catch(e => console.log('STATE THREW', e.message));
 ")
 echo "$T55_OUT" | grep -qF "STATE OK" && ok "comms_state writers + read side correct" || { fail "comms_state: $T55_OUT"; }
