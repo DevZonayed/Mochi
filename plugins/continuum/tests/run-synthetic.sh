@@ -670,6 +670,9 @@ import('$PLUGIN_DIR/lib/comms_dedupe.js').then((m) => {
   // different text -> different fp
   ne(m.fingerprint({ ...live, text:'nope' }), fp, 'text-sensitive');
 
+  // different chatId -> different fp (chatId is the LEAD discriminator)
+  ne(m.fingerprint({...live, chatId:'other@g.us'}), fp, 'chatId-sensitive');
+
   // media path: text empty, fingerprint uses media.mediaKey when present
   const med = { chatId:'c@g.us', ts:1717700000, senderId:'19999999999@s.whatsapp.net', text:'', media:{ mediaKey:'KEY1' }, source:'live', msgId:'x' };
   const med2 = { ...med, source:'import', msgId:'import:y' };
