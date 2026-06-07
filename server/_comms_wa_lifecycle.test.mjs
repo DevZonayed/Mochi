@@ -209,42 +209,14 @@ function mockSocket() {
 }
 
 // 12) link() QR path: timeout fires if no qr and no open event arrive.
-// Uses a tiny custom timeout via a subclass override to avoid a 30-second real wait.
+// Uses qrTimeoutMs:20 (constructor injection) to drive the REAL link() with a
+// tiny timeout instead of the 30-second production default — no subclass needed.
 {
   const dir = await setup();
   const sock = mockSocket();
-  // Monkey-patch the QR_TIMEOUT_MS by overriding the relevant Promise block via a
-  // subclass that replaces link() with a version using a 20ms timeout.
-  class FastTimeoutProvider extends WhatsAppProvider {
-    async link(accountId, opts = {}, deps = {}) {
-      const makeSocket = deps.makeSocket || ((d) => this._realMakeSocket(accountId, this.getSessionDir(accountId), d));
-      const qrToDataUrl = deps.qrToDataUrl || (async (s) => this._qrToDataUrl(s));
-      const s = await this.connect(accountId, { makeSocket });
-      if (opts.phone) {
-        const code = await s.requestPairingCode(String(opts.phone).replace(/[^0-9]/g, ""));
-        return { method: "pairing", payload: { code } };
-      }
-      const TIMEOUT_MS = 20; // short for test
-      return await new Promise((resolve, reject) => {
-        let settled = false;
-        const settle = (fn, val) => { if (settled) return; settled = true; clearTimeout(timer); fn(val); };
-        const onUpdate = async (update) => {
-          if (update.connection === "open") {
-            settle(reject, Object.assign(new Error("link_no_qr"), { code: "link_no_qr" }));
-            return;
-          }
-          if (!update.qr) return;
-          const dataUrl = await qrToDataUrl(update.qr);
-          settle(resolve, { method: "qr", payload: { dataUrl, ascii: `[QR] scan\n${update.qr}` } });
-        };
-        const timer = setTimeout(() => {
-          settle(reject, Object.assign(new Error("link_timeout: QR not emitted within timeout"), { code: "link_timeout" }));
-        }, TIMEOUT_MS);
-        s.ev.on("connection.update", onUpdate);
-      });
-    }
-  }
-  const p = new FastTimeoutProvider({ projectDirFor: () => dir });
+  // qrTimeoutMs:20 mirrors the reconnectBaseMs pattern and makes the real link()
+  // timeout path testable without copy-pasting its implementation.
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, qrTimeoutMs: 20 });
   const linkP = p.link(ACCOUNT, {}, { makeSocket: () => sock, qrToDataUrl: async (s) => `data:image/png;base64,QR(${s})` });
   // Do NOT emit any event — let the timeout fire.
   await assert.rejects(linkP, (err) => {

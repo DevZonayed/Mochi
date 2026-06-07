@@ -96,7 +96,9 @@ async function ensureJidNormalizer() {
 
 export class WhatsAppProvider extends CommsProvider {
   // reconnectBaseMs: injectable so tests can use 0 to skip real delays.
-  constructor({ projectDirFor, reconnectBaseMs } = {}) {
+  // qrTimeoutMs: injectable so tests can use a small value (e.g. 20) instead of
+  //   the 30-second production default, driving the real link() timeout path.
+  constructor({ projectDirFor, reconnectBaseMs, qrTimeoutMs } = {}) {
     super("whatsapp");
     this.projectDirFor = projectDirFor || (() => process.cwd());
     this.sockets = new Map();           // accountId -> socket
@@ -106,6 +108,8 @@ export class WhatsAppProvider extends CommsProvider {
     this.logger = consoleLogger({ level: "warn" });
     // Allow tests to pass reconnectBaseMs:0 to disable backoff delays.
     this._reconnectBaseMs = reconnectBaseMs !== undefined ? reconnectBaseMs : WhatsAppProvider._RECONNECT_BASE_MS;
+    // Allow tests to pass qrTimeoutMs to control link() QR wait (default 30 s).
+    this._qrTimeoutMs = qrTimeoutMs !== undefined ? qrTimeoutMs : WhatsAppProvider._QR_TIMEOUT_MS;
   }
 
   getSessionDir(accountId) {
@@ -191,6 +195,8 @@ export class WhatsAppProvider extends CommsProvider {
   // Base delay (ms) between reconnect attempts; doubles with each attempt (capped).
   static _RECONNECT_BASE_MS = 500;
   static _RECONNECT_MAX_MS  = 30_000;
+  // Default QR timeout (ms); injectable via constructor qrTimeoutMs for tests.
+  static _QR_TIMEOUT_MS = 30_000;
 
   _wireConnection(accountId, sock, projectDir, makeSocket) {
     sock.ev.on("connection.update", async (update) => {
@@ -257,10 +263,10 @@ export class WhatsAppProvider extends CommsProvider {
     }
 
     // QR path: resolve on the first qr from connection.update; guard re-emits.
-    // Timeout (30 s default) prevents the promise from hanging forever when the
-    // connection reaches 'open' without ever emitting a qr (already-authenticated
-    // session) or when a transport error prevents qr delivery.
-    const QR_TIMEOUT_MS = 30_000;
+    // Timeout (default 30 s; injectable via constructor qrTimeoutMs) prevents the
+    // promise from hanging forever when the connection reaches 'open' without ever
+    // emitting a qr (already-authenticated session) or when a transport error
+    // prevents qr delivery.
     return await new Promise((resolve, reject) => {
       let settled = false;
       const settle = (fn, val) => {
@@ -281,7 +287,7 @@ export class WhatsAppProvider extends CommsProvider {
       };
       const timer = setTimeout(() => {
         settle(reject, Object.assign(new Error("link_timeout: QR not emitted within timeout"), { code: "link_timeout" }));
-      }, QR_TIMEOUT_MS);
+      }, this._qrTimeoutMs);
       sock.ev.on("connection.update", onUpdate);
     });
   }
