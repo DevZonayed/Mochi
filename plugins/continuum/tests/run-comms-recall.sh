@@ -127,6 +127,13 @@ R6=$(CALL '{"query":"deploy","since":1717750000}')
 N6=$(echo "$R6" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
 TOP6=$(echo "$R6" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['hits'][0]['msgId'] if d['hits'] else 'none')")
 [ "$N6" = "1" ] && [ "$TOP6" = "G3" ] && ok "since filter keeps only G3" || fail "expected 1/G3 got $N6/$TOP6"
+# until: only messages with ts <= 1717750000 survive; G3 (ts 1717800000) is excluded.
+# G1 (ts 1717700000) is about "lunch" so it won't match "deploy"; only G2 matches.
+R6B=$(CALL '{"query":"deploy","until":1717750000}')
+N6B=$(echo "$R6B" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+TOP6B=$(echo "$R6B" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['hits'][0]['msgId'] if d['hits'] else 'none')")
+UNTIL_HAS_G3=$(echo "$R6B" | python3 -c "import json,sys; print('YES' if any(h['msgId']=='G3' for h in json.load(sys.stdin)['hits']) else 'NO')")
+[ "$N6B" = "1" ] && [ "$TOP6B" = "G2" ] && [ "$UNTIL_HAS_G3" = "NO" ] && ok "until filter keeps G2, excludes G3" || fail "expected 1/G2/no-G3 got $N6B/$TOP6B/G3=$UNTIL_HAS_G3"
 
 # ---- C7: no-match query returns empty hits, no crash -----------------------
 echo
@@ -134,6 +141,46 @@ echo "C7 — non-matching query returns hitCount 0"
 R7=$(CALL '{"query":"kubernetes"}')
 N7=$(echo "$R7" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
 [ "$N7" = "0" ] && ok "no match → 0 hits, no error" || fail "expected 0 got $N7"
+
+# ---- C8: provider filter scopes results to that provider only --------------
+echo
+echo "C8 — provider filter restricts to that provider"
+# whatsapp provider has deploy messages; a non-existent provider returns 0 hits
+R8=$(CALL '{"query":"deploy","provider":"whatsapp"}')
+N8=$(echo "$R8" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$N8" -ge 1 ] && ok "provider=whatsapp returns hits (got $N8)" || fail "expected >=1 hits for provider=whatsapp got $N8"
+R8B=$(CALL '{"query":"deploy","provider":"telegram"}')
+N8B=$(echo "$R8B" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$N8B" = "0" ] && ok "provider=telegram (no such provider) returns 0 hits" || fail "expected 0 hits for unknown provider got $N8B"
+
+# ---- C9: accountId filter scopes results to that account only --------------
+echo
+echo "C9 — accountId filter restricts to that account"
+# 'work' account has deploy messages; an unknown account returns 0 hits
+R9=$(CALL '{"query":"deploy","accountId":"work"}')
+N9=$(echo "$R9" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$N9" -ge 1 ] && ok "accountId=work returns hits (got $N9)" || fail "expected >=1 hits for accountId=work got $N9"
+R9B=$(CALL '{"query":"deploy","accountId":"personal"}')
+N9B=$(echo "$R9B" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$N9B" = "0" ] && ok "accountId=personal (no such account) returns 0 hits" || fail "expected 0 hits for unknown accountId got $N9B"
+
+# ---- C10: missing/empty query throws with 'query required' -----------------
+echo
+echo "C10 — missing or empty query throws"
+ERR_EMPTY=$(node -e "
+import('$PLUGIN_DIR/lib/comms_recall.js').then(({commsRecall}) => {
+  try { commsRecall('$REPO', { query: '' }); console.log('NO_THROW'); }
+  catch(e) { console.log(e.message.includes('query required') ? 'THREW_OK' : 'THREW_WRONG:' + e.message); }
+}).catch((e) => { console.log('ERR:' + e.message); process.exit(1); });
+")
+[ "$ERR_EMPTY" = "THREW_OK" ] && ok "empty query throws 'query required'" || fail "expected THREW_OK got $ERR_EMPTY"
+ERR_MISSING=$(node -e "
+import('$PLUGIN_DIR/lib/comms_recall.js').then(({commsRecall}) => {
+  try { commsRecall('$REPO', {}); console.log('NO_THROW'); }
+  catch(e) { console.log(e.message.includes('query required') ? 'THREW_OK' : 'THREW_WRONG:' + e.message); }
+}).catch((e) => { console.log('ERR:' + e.message); process.exit(1); });
+")
+[ "$ERR_MISSING" = "THREW_OK" ] && ok "missing query throws 'query required'" || fail "expected THREW_OK got $ERR_MISSING"
 
 # ---- Summary ---------------------------------------------------------------
 echo
