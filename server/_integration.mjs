@@ -48,6 +48,9 @@ function startFakeExtension() {
       case "navigate":
         result = { tabId: 100, url: params?.url ?? "about:blank" };
         break;
+      case "request_attention":
+        result = { ok: true, notified: true, hasSession: true, reason: params?.reason ?? null };
+        break;
       case "snapshot":
         result = {
           tabId: 100,
@@ -196,6 +199,8 @@ async function main() {
       SUPER_TESTER_WS_PORT: String(TEST_PORT),
       SUPER_TESTER_AUTO_LAUNCH: "false",
       SUPER_TESTER_EXTENSION_WAIT_MS: "5000",
+      // Don't actually open macOS System Settings during the test.
+      MOCHI_NO_OS_EXEC: "1",
     },
     stderr: "pipe",
   });
@@ -228,7 +233,7 @@ async function main() {
   logStep("Listing tools");
   const tools = await client.listTools();
   const names = tools.tools.map((t) => t.name);
-  assertEq("total tool count", names.length, 60);
+  assertEq("total tool count", names.length, 61);
   for (const n of [
     "browser_session_health",
     "browser_evaluate",
@@ -347,6 +352,20 @@ async function main() {
   logStep("Calling browser_session_health with heal:true");
   const healed = parsePayload(await client.callTool({ name: "browser_session_health", arguments: { heal: true } }));
   assertOk("session_health healed", !!healed.healed && Array.isArray(healed.healed.healedTabs), healed);
+
+  // ----- 9d) request_attention round-trips through the broker (0.5.0) -----
+  logStep("Calling browser_request_attention");
+  const attnRes = parsePayload(await client.callTool({ name: "browser_request_attention", arguments: { reason: "look here" } }));
+  assertOk("request_attention ok", attnRes.ok === true, attnRes);
+  assertEq("request_attention reason echoed", attnRes.reason, "look here");
+
+  // ----- 9e) /os/open-notification-settings HTTP route is reachable (0.5.0) -----
+  // (regression guard: it must NOT 404 behind the /claude/ path prefix gate)
+  logStep("Hitting /os/open-notification-settings over HTTP");
+  const osResp = await fetch(`http://127.0.0.1:${TEST_PORT}/os/open-notification-settings`, { method: "POST" });
+  assertEq("os route status 200 (not 404)", osResp.status, 200);
+  const osBody = await osResp.json();
+  assertOk("os route returns a boolean ok", typeof osBody.ok === "boolean", osBody);
 
   // ----- 10) Confirm wire types the broker actually forwarded -----
   logStep("Verifying wire types reached the fake extension");

@@ -89398,6 +89398,7 @@ var import_websocket_server = __toESM(require_websocket_server(), 1);
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { exec } from "node:child_process";
 var HELLO_TIMEOUT_MS = 3e3;
 var REQUEST_TIMEOUT_MS = 3e4;
 var CLIENT_CONNECT_TIMEOUT_MS = 5e3;
@@ -89608,7 +89609,7 @@ var Bridge = class {
       res.writeHead(204).end();
       return;
     }
-    if (!url.pathname.startsWith("/claude/")) {
+    if (!url.pathname.startsWith("/claude/") && !url.pathname.startsWith("/os/")) {
       res.writeHead(404, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "not found" }));
       return;
     }
@@ -89666,6 +89667,18 @@ var Bridge = class {
         if (!sessionId || !message) return this._respondJson(res, 400, { error: "sessionId and message required" });
         const ok = this._pushClaudeMessage(sessionId, message, context);
         return this._respondJson(res, ok ? 200 : 404, { ok });
+      }
+      if (p === "/os/open-notification-settings") {
+        if (process.platform !== "darwin") {
+          return this._respondJson(res, 200, { ok: false, reason: "not-macos" });
+        }
+        if (process.env.MOCHI_NO_OS_EXEC) {
+          return this._respondJson(res, 200, { ok: true, skipped: true });
+        }
+        exec('open "x-apple.systempreferences:com.apple.preference.notifications"', (err) => {
+          this._respondJson(res, 200, err ? { ok: false, reason: String(err.message ?? err) } : { ok: true });
+        });
+        return;
       }
       this._respondJson(res, 404, { error: "not found" });
     });
@@ -93786,7 +93799,7 @@ function secretsDir() {
   return path4.join(projectDir2(), ".continuum", "secrets");
 }
 var _execForTesting = null;
-function exec(cmd, opts) {
+function exec2(cmd, opts) {
   if (_execForTesting) return _execForTesting(cmd, opts);
   return _execSync(cmd, opts);
 }
@@ -93795,7 +93808,7 @@ function opAvailable() {
   const now = Date.now();
   if (now - _opAvailableCache.checkedAt < 6e4) return _opAvailableCache.available;
   try {
-    exec("op --version", { stdio: ["ignore", "pipe", "ignore"], timeout: 1500 });
+    exec2("op --version", { stdio: ["ignore", "pipe", "ignore"], timeout: 1500 });
     _opAvailableCache = { checkedAt: now, available: true };
   } catch {
     _opAvailableCache = { checkedAt: now, available: false };
@@ -93805,7 +93818,7 @@ function opAvailable() {
 function resolveOpRef(refPath) {
   if (!opAvailable()) return null;
   try {
-    const out = exec(`op read "op://${refPath}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5e3 });
+    const out = exec2(`op read "op://${refPath}"`, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5e3 });
     return String(out).replace(/\r?\n$/, "");
   } catch {
     return null;
@@ -95292,6 +95305,7 @@ var trace = new SessionTrace();
 var lastKnownUrl = null;
 var activeOrigin = null;
 var serverStartedAt = Date.now();
+var PROJECT_LABEL = path10.basename(process.cwd()) || "Mochi";
 var DEFAULT_SNAPSHOT_MODE = "compact";
 var DEFAULT_SNAPSHOT_SCOPE = "viewport";
 var DEFAULT_SNAPSHOT_MAX_BYTES = 12e3;
@@ -95315,7 +95329,7 @@ var tools = [
   // --- session lifecycle ---
   {
     name: "browser_session_start",
-    description: "Start a new browser session. Creates a Chrome tab group with an initial tab; all subsequent operations are scoped to that group. Pass newWindow=true to spawn a fresh Chrome window so window-resize won't disturb the user's other tabs. By default the new window is brought to OS foreground once (so the user sees automation has started) \u2014 subsequent browser_navigate calls do NOT steal focus (default changed in 0.4.1). Pass bringToFront:false to start fully in the background. Idempotent: ends a previous session first.",
+    description: "Start a new browser session. Creates a Chrome tab group with an initial tab; all subsequent operations are scoped to that group. Pass newWindow=true to spawn a fresh Chrome window so window-resize won't disturb the user's other tabs. By default automation does NOT raise the Chrome window to the OS foreground \u2014 instead the extension posts a click-to-focus notification (the user clicks it to bring the window forward). The tab is always made active within its window (prevents Chrome throttling). Pass bringToFront:true to force the window forward (e.g. when you want to watch). Idempotent: ends a previous session first.",
     inputSchema: {
       type: "object",
       properties: {
@@ -95328,7 +95342,7 @@ var tools = [
         left: { type: "number" },
         top: { type: "number" },
         state: { type: "string", enum: ["normal", "maximized", "minimized", "fullscreen"] },
-        bringToFront: { type: "boolean", default: true, description: "On session start, raise the new window to OS foreground once. The tab is always made active within its window regardless (prevents Chrome throttling). Default true so users see automation has started; pass false for fully-silent background start." },
+        bringToFront: { type: "boolean", default: false, description: "Raise the new window to OS foreground on start (steals keyboard focus). Default false in 0.5.0+ \u2014 a click-to-focus notification is posted instead. The tab is always made active within its window regardless (prevents Chrome throttling)." },
         visuals: {
           type: "object",
           description: "Visual feedback layer (animated cursor + target ring + HUD). Defaults: enabled with cursor + hud; slowMo:0.",
@@ -95346,6 +95360,19 @@ var tools = [
     name: "browser_session_end",
     description: "End the current session. Detaches debugger, ungroups tabs (default) or closes them.",
     inputSchema: { type: "object", properties: { closeTabs: { type: "boolean", default: false } } }
+  },
+  {
+    name: "browser_request_attention",
+    description: "Post an OS notification asking the human to look at this browser session \u2014 e.g. a suspected captcha/login wall, an ambiguous choice you want them to make, or 'task finished \u2014 come look'. Does NOT steal focus; the user clicks the notification to bring the window forward. Use sparingly \u2014 only when you genuinely need the human or want them to see a result.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        reason: { type: "string", description: "Short message shown in the notification." },
+        tabId: { type: "number", description: "Optional tab to focus when the user clicks the notification." },
+        urgent: { type: "boolean", default: true, description: "Keep the notification on screen until the user acts (requireInteraction)." }
+      },
+      required: ["reason"]
+    }
   },
   // --- navigation + tabs ---
   {
@@ -96064,6 +96091,7 @@ var tools = [
 var TOOL_TO_WS_TYPE = {
   browser_session_start: "session_start",
   browser_session_end: "session_end",
+  browser_request_attention: "request_attention",
   browser_navigate: "navigate",
   browser_open_tab: "open_tab",
   browser_list_tabs: "list_tabs",
@@ -96526,7 +96554,10 @@ async function runWireTool(bridge2, name, args) {
     trace.reset();
     activeOrigin = null;
     lastKnownUrl = null;
-    const result2 = await bridge2.send(wsType, args);
+    const startArgs = { ...args };
+    if (!startArgs.title) startArgs.title = PROJECT_LABEL;
+    startArgs.label = startArgs.label || startArgs.title || PROJECT_LABEL;
+    const result2 = await bridge2.send(wsType, startArgs);
     trace.reset(result2.sessionId);
     return result2;
   }

@@ -11,7 +11,7 @@
 
 import { recall, formatRecallForHuman } from "../lib/recall.js";
 
-const SERVER_INFO = { name: "continuum", version: "0.5.0" };
+const SERVER_INFO = { name: "continuum", version: "0.6.0" };
 const DEFAULT_PROTOCOL = "2025-03-26";
 
 const RECALL_TOOL = {
