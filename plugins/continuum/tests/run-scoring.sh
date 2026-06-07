@@ -91,6 +91,22 @@ import('$PLUGIN_DIR/lib/scoring.js').then(({termFrequency}) => {
 ")
 echo "$TF_OUT" | grep -qF "TF_OK" && ok "termFrequency counts correctly" || fail "termFrequency: $TF_OUT"
 
+# ---- S6: recall.js re-exports the same primitive identities -----------------
+echo
+echo "S6 — recall.js re-exports stem/tokenize/etc. (same identity as scoring.js)"
+REEXPORT=$(node -e "
+Promise.all([
+  import('$PLUGIN_DIR/lib/scoring.js'),
+  import('$PLUGIN_DIR/lib/recall.js'),
+]).then(([s, r]) => {
+  const names = ['stem','tokenize','tokenizeStemmed','termFrequency'];
+  const allFns  = names.every((n) => typeof r[n] === 'function');
+  const sameRef = names.every((n) => r[n] === s[n]);
+  console.log(allFns && sameRef ? 'REEXPORT_OK' : 'REEXPORT_BAD allFns=' + allFns + ' sameRef=' + sameRef);
+}).catch((e) => console.log('REEXPORT_ERR:' + e.message));
+")
+echo "$REEXPORT" | grep -qF "REEXPORT_OK" && ok "recall.js re-exports identical primitive references" || fail "re-export: $REEXPORT"
+
 # ---- Summary ---------------------------------------------------------------
 echo
 echo "─────────────────────────────"
