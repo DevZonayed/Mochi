@@ -1233,6 +1233,43 @@ import('$PLUGIN_DIR/lib/comms_recall.js').then(({commsRecall}) => {
 [ "$_CR_HC11B" = "1" ] && ok "verbatim-duplicate JID in allowlist: hitCount==1 (not inflated)" || fail "expected hitCount 1 got $_CR_HC11B (shard scanned twice)"
 rm -rf "$CR_REPO" "$_CR_DUP_REPO" "$_CR_DUP2_REPO"
 
+# ============================================================================
+# Phase 5: comms init-gate, idempotent gitignore, state files, slash commands
+# ============================================================================
+
+# ---- T44: comms_state writers + read side used by the hook ------------------
+echo
+echo "T44 — comms_state: setAccountStatus + setSeen + read side"
+C44REPO="$(mktemp -d -t continuum-synth-c44.XXXXXX)"
+mkdir -p "$C44REPO/.continuum/comms"
+T44_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/comms_state.js').then((m) => {
+  const d = '$C44REPO';
+  // MCP writes link status:
+  m.setAccountStatus(d, 'whatsapp', 'work', 'connected');
+  m.setAccountStatus(d, 'whatsapp', 'home', 'needs_login');
+  const st = m.readState(d);
+  const status_ok = st.whatsapp.work.status === 'connected'
+    && st.whatsapp.home.status === 'needs_login'
+    && typeof st.whatsapp.work.updatedAt === 'number';
+  // accountStatuses flattens for the hook:
+  const flat = m.accountStatuses(st);
+  const flat_ok = flat.some(x => x.provider==='whatsapp' && x.accountId==='home' && x.status==='needs_login');
+  // watermark write/read:
+  m.setSeen(d, 'whatsapp', 'work', '123@g.us', 1717700000);
+  const seen = m.readSeen(d);
+  const seen_ok = seen['whatsapp/work/123@g.us'] === 1717700000;
+  // absent files degrade to empty objects (hook must not throw):
+  const emptySt = m.readState('/tmp/no-such-dir-c44');
+  const emptySeen = m.readSeen('/tmp/no-such-dir-c44');
+  const empty_ok = JSON.stringify(emptySt)==='{}' && JSON.stringify(emptySeen)==='{}';
+  console.log((status_ok && flat_ok && seen_ok && empty_ok) ? 'STATE OK'
+    : 'STATE BAD st='+status_ok+' flat='+flat_ok+' seen='+seen_ok+' empty='+empty_ok);
+}).catch(e => console.log('STATE THREW', e.message));
+")
+echo "$T44_OUT" | grep -qF "STATE OK" && ok "comms_state writers + read side correct" || { fail "comms_state: $T44_OUT"; }
+rm -rf "$C44REPO"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
