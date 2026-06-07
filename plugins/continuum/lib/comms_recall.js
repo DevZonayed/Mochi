@@ -31,6 +31,12 @@ function excerptOf(text) {
 // Jids are normalized (strips device suffix, lowercases) so that shard paths
 // and chatId comparisons agree with the normalizeJid logic used by listChats
 // and isAllowed — preventing silent under-retrieval for device-suffix jids.
+//
+// Deduplication: two allowlist entries that normalize to the same JID (e.g.
+// '19999999999:12@s.whatsapp.net' and '19999999999@s.whatsapp.net') must not
+// cause the same shard to be scanned twice. A per-(provider,account) Set of
+// already-seen normalized JIDs guards against both device-suffix variants and
+// verbatim duplicate entries in allowed_jids.
 function allowedChats(cfg, { provider, accountId, chatId }) {
   const out = [];
   const normalizedChatId = chatId ? normalizeJid(chatId) : null;
@@ -41,12 +47,16 @@ function allowedChats(cfg, { provider, accountId, chatId }) {
     for (const [acc, av] of Object.entries(accounts)) {
       if (accountId && acc !== accountId) continue;
       const jids = Array.isArray(av && av.allowed_jids) ? av.allowed_jids : [];
+      const seen = new Set();
       for (const jid of jids) {
         const normJid = normalizeJid(jid);
         if (!normJid) continue;
         if (normalizedChatId && normJid !== normalizedChatId) continue;
         // Defense in depth: confirm via the shared allowlist decision.
         if (!isAllowed(cfg, prov, acc, jid)) continue;
+        // Dedup: skip if this normalized JID was already added for this account.
+        if (seen.has(normJid)) continue;
+        seen.add(normJid);
         out.push({ provider: prov, accountId: acc, chatId: normJid });
       }
     }
