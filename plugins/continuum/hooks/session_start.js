@@ -55,14 +55,20 @@ async function readStdin() {
   });
 }
 
-function emitContext(text) {
-  const out = {
+// Build (do NOT emit) the SessionStart additionalContext payload, so callers
+// can accumulate context and emit exactly once. emitContextOnce() is the single
+// terminal writer used at the end of main() (B3 fix — no early emit+exit).
+function buildContextOutput(text) {
+  return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
       additionalContext: text,
     },
   };
-  process.stdout.write(JSON.stringify(out));
+}
+
+function emitContextOnce(text) {
+  process.stdout.write(JSON.stringify(buildContextOutput(text)));
   process.exit(0);
 }
 
@@ -173,6 +179,11 @@ function computeDefaultSessionName(projectDir) {
   }
 }
 
+// Temporary stub — replaced by the real comms gate in the next task.
+function commsGate() {
+  return "";
+}
+
 async function main() {
   const stdinRaw = await readStdin();
   let payload = {};
@@ -270,22 +281,30 @@ async function main() {
 
   const cfg = readConfig(projectDir);
 
+  // Accumulate everything into ONE context string, emit exactly once at the end
+  // (B3 fix). The bootstrap branch APPENDS instead of emitting+exiting early, so
+  // the comms gate (below) is reachable even on a fresh repo's first session.
+  let context = "";
+
   if (!isBootstrapped(projectDir)) {
-    emitContext(bootstrapDirective(projectDir));
-    return;
+    context += bootstrapDirective(projectDir);
+  } else {
+    context += buildLoadedContext(projectDir, cfg);
+
+    const sentinel = readSentinel(projectDir);
+    if (sentinel) {
+      const trigger = sentinel.trigger || "?";
+      const why = sentinel.matcher || sentinel.why_session_ended || "?";
+      const archive = sentinel.archive_path || "(no archive recorded)";
+      context += `\n\n---\n\n**⚠ Pending checkpoint detected.** Previous session ended via \`${trigger}\` (${why}). Raw transcript was archived to:\n\n\`${archive}\`\n\nIf the last session changed decisions or surfaced new threads, run \`/continuum:checkpoint\` now — read the archive with \`zcat\` if you need to recover detail. The sentinel clears automatically when a new link is written.`;
+    }
   }
 
-  let context = buildLoadedContext(projectDir, cfg);
+  // Comms init / onboarding / freshness gate (spec §8) is appended here, before
+  // the single emit. (Added in the next task.)
+  context += commsGate(projectDir, payload.source);
 
-  const sentinel = readSentinel(projectDir);
-  if (sentinel) {
-    const trigger = sentinel.trigger || "?";
-    const why = sentinel.matcher || sentinel.why_session_ended || "?";
-    const archive = sentinel.archive_path || "(no archive recorded)";
-    context += `\n\n---\n\n**⚠ Pending checkpoint detected.** Previous session ended via \`${trigger}\` (${why}). Raw transcript was archived to:\n\n\`${archive}\`\n\nIf the last session changed decisions or surfaced new threads, run \`/continuum:checkpoint\` now — read the archive with \`zcat\` if you need to recover detail. The sentinel clears automatically when a new link is written.`;
-  }
-
-  emitContext(context);
+  emitContextOnce(context);
 }
 
 main().catch((err) => {
