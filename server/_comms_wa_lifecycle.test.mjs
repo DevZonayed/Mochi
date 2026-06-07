@@ -226,4 +226,115 @@ function mockSocket() {
   await fs.rm(dir, { recursive: true, force: true });
 }
 
+// ---------------------------------------------------------------------------
+// Task 3: WhatsAppProvider listGroups / listChats / getMessages / unlink.
+// ---------------------------------------------------------------------------
+import { appendMessage } from "../plugins/continuum/lib/comms_store.js";
+import { commsAuthDir } from "../plugins/continuum/lib/paths.js";
+import { acquireLock, readLock } from "./src/comms/whatsapp.js";
+
+function mockGroupSocket(groups) {
+  const sock = mockSocket();
+  sock.groupFetchAllParticipating = async () => groups;
+  return sock;
+}
+
+// 13) listGroups(accountId): maps group subjects to {id,name,chatKind:'group'}.
+{
+  const dir = await setup();
+  const groups = {
+    "111@g.us": { id: "111@g.us", subject: "Engineering" },
+    "222@g.us": { id: "222@g.us", subject: "Random" },
+  };
+  const sock = mockGroupSocket(groups);
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
+  await p.connect(ACCOUNT, { makeSocket: () => sock });
+  const list = await p.listGroups(ACCOUNT);
+  assert.equal(list.length, 2);
+  const byId = Object.fromEntries(list.map((g) => [g.id, g]));
+  assert.equal(byId["111@g.us"].name, "Engineering");
+  assert.equal(byId["111@g.us"].chatKind, "group");
+  assert.equal(byId["222@g.us"].name, "Random");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 14) listGroups(accountId): throws a clear error when not connected.
+{
+  const dir = await setup();
+  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  await assert.rejects(() => p.listGroups(ACCOUNT), (err) => {
+    assert.match(String(err.message), /not connected/i);
+    return true;
+  }, "listGroups must throw 'account not connected' with no live socket");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 15) listChats(accountId): returns allowlisted chats from the local store (no network).
+{
+  const dir = await setup();
+  // Allowlist a chat and append a message to seed the store.
+  const CHAT = "19998887777@s.whatsapp.net";
+  await writeConfig(dir, { version: 1, decided: true, declined: false,
+    providers: { whatsapp: { accounts: { [ACCOUNT]: { capture: "session", mode: "strict", allowed_jids: [CHAT] } } } } });
+  appendMessage(dir, { provider: "whatsapp", accountId: ACCOUNT, chatId: CHAT,
+    msgId: "m1", fromMe: false, senderId: CHAT, senderName: "Sam", ts: 100, tsIso: new Date(100000).toISOString(),
+    kind: "text", text: "hi", media: null, reply_to: null, source: "live" });
+  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  const chats = await p.listChats(ACCOUNT);
+  assert.equal(chats.length, 1);
+  assert.equal(chats[0].chatId, CHAT);
+  assert.equal(chats[0].count, 1);
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 16) getMessages(accountId, chatId): best-effort read of normalized Msgs from the store.
+{
+  const dir = await setup();
+  const CHAT = "19998887777@s.whatsapp.net";
+  for (const m of [
+    { msgId: "a", ts: 100, text: "one" },
+    { msgId: "b", ts: 200, text: "two" },
+    { msgId: "c", ts: 300, text: "three" },
+  ]) {
+    appendMessage(dir, { provider: "whatsapp", accountId: ACCOUNT, chatId: CHAT,
+      msgId: m.msgId, fromMe: false, senderId: CHAT, senderName: "Sam", ts: m.ts, tsIso: new Date(m.ts * 1000).toISOString(),
+      kind: "text", text: m.text, media: null, reply_to: null, source: "live" });
+  }
+  const p = new WhatsAppProvider({ projectDirFor: () => dir });
+  const msgs = await p.getMessages(ACCOUNT, CHAT, { limit: 2 });
+  assert.ok(Array.isArray(msgs));
+  assert.equal(msgs.length, 2);
+  // newest-first
+  assert.equal(msgs[0].msgId, "c");
+  assert.equal(msgs[1].msgId, "b");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 17) unlink(accountId): wipes the auth dir, releases the lock, clears in-memory entry.
+{
+  const dir = await setup();
+  const sock = mockSocket();
+  let ended = 0;
+  sock.end = () => { ended++; };
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
+  const authDir = commsAuthDir(dir, "whatsapp", ACCOUNT);
+  // Acquire the lock + drop a creds file so we can prove they're gone after unlink.
+  await acquireLock(authDir);
+  await fs.writeFile(path.join(authDir, "creds.json"), "{}");
+  assert.ok(await readLock(authDir), "lock should be held before unlink");
+  await p.connect(ACCOUNT, { makeSocket: () => sock });
+  await p.unlink(ACCOUNT);
+  // auth dir is gone
+  let exists = true;
+  try { await fs.access(authDir); } catch { exists = false; }
+  assert.equal(exists, false, "unlink must wipe the auth dir");
+  // lock released (dir gone => readLock returns null)
+  assert.equal(await readLock(authDir), null, "unlink must release the lock");
+  // in-memory entry cleared
+  assert.equal(p.sockets.has(ACCOUNT), false, "unlink must clear the in-memory socket entry");
+  assert.equal(ended, 1, "unlink must close the live socket exactly once");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
 console.log("✓ comms whatsapp lifecycle (qr/pairing/connection.update/close/backoff/storm-cap/link-timeout)");
+console.log("✓ comms whatsapp provider methods (listGroups/listChats/getMessages/unlink)");

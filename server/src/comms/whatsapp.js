@@ -77,7 +77,7 @@ export async function releaseLock(authDir) {
 // ---- WhatsAppProvider -------------------------------------------------------
 import { CommsProvider } from "./provider.js";
 import { normalize } from "./normalize.js";
-import { appendMessage } from "../../../plugins/continuum/lib/comms_store.js";
+import { appendMessage, listChats as storeListChats, getSlice } from "../../../plugins/continuum/lib/comms_store.js";
 import { fingerprint } from "../../../plugins/continuum/lib/comms_dedupe.js";
 import { isAllowed, normalizeJid } from "../../../plugins/continuum/lib/comms_allowlist.js";
 import { readConfig } from "../../../plugins/continuum/lib/comms_config.js";
@@ -243,6 +243,68 @@ export class WhatsAppProvider extends CommsProvider {
   async _wipeAuth(accountId) {
     const dir = this.getSessionDir(accountId);
     await fs.rm(dir, { recursive: true, force: true });
+  }
+
+  // ---- CommsProvider read/admin surface (comms-setup step 4, comms-recall) ----
+
+  // listGroups: enumerate the groups this account participates in, live from the
+  // socket. Requires a connected socket — there is no offline group roster.
+  // Returns [{ id, name, chatKind:"group" }] (name = group subject).
+  async listGroups(accountId) {
+    const sock = this.sockets.get(accountId);
+    if (!sock || this.statuses.get(accountId) !== "connected") {
+      throw new Error(`account not connected: ${accountId}`);
+    }
+    const g = (await sock.groupFetchAllParticipating()) || {};
+    return Object.values(g).map((meta) => ({
+      id: meta.id,
+      name: meta.subject ?? null,
+      chatKind: "group",
+    }));
+  }
+
+  // listChats: chats already known from the LOCAL store for this account (no
+  // network). Filtered to the account's allowlist by the store helper. Returns
+  // store entries already scoped to provider:"whatsapp"/this accountId.
+  async listChats(accountId) {
+    const projectDir = this.projectDirFor(accountId);
+    const cfg = readConfig(projectDir);
+    const acct = cfg?.providers?.whatsapp?.accounts?.[accountId];
+    const allowed = Array.isArray(acct?.allowed_jids) ? acct.allowed_jids : [];
+    return storeListChats(projectDir, allowed)
+      .filter((c) => c.provider === "whatsapp" && c.accountId === accountId);
+  }
+
+  // getMessages: best-effort read of normalized Msgs from the local store
+  // (display/backfill). HARD caps + ordering are enforced by getSlice.
+  async getMessages(accountId, chatId, opts = {}) {
+    const projectDir = this.projectDirFor(accountId);
+    const normChatId = normalizeJid(chatId);
+    const { messages } = getSlice(projectDir, {
+      provider: "whatsapp",
+      accountId,
+      chatId: normChatId,
+      limit: opts.limit,
+      before: opts.before,
+      after: opts.after,
+    });
+    return messages;
+  }
+
+  // unlink: tear down everything for this account — close the live socket,
+  // release the single-writer lock, wipe the auth dir, and forget in-memory
+  // state so a subsequent link() starts clean.
+  async unlink(accountId) {
+    const sock = this.sockets.get(accountId);
+    if (sock) {
+      try { sock.end?.(); } catch {}
+    }
+    const authDir = this.getSessionDir(accountId);
+    try { await releaseLock(authDir); } catch {}
+    await this._wipeAuth(accountId);
+    this.sockets.delete(accountId);
+    this.statuses.delete(accountId);
+    this._reconnects.delete(accountId);
   }
 
   // link: open a socket (if needed) and resolve to QR or pairing code.
