@@ -1090,6 +1090,30 @@ import('$PLUGIN_DIR/lib/comms_import.js').then((m) => {
     const rec2 = D.reconcileImport(rec.merged, msgs2);
     eq(rec2.added.length, 0, 'idempotent-reimport-no-new');
 
+    // TZ ALIGNMENT (cross-source dedupe for a non-UTC user). A WhatsApp export
+    // writes LOCAL wall-clock and carries no tz; live records carry a real UTC
+    // epoch. For a UTC-5 user, the SAME message a live record captured at
+    // 2024-06-06T18:13:20Z appears in the export as '1:13:20 PM'. Without a tz
+    // hint the parser reads that as 13:13:20 UTC -> a DIFFERENT minute bucket ->
+    // a different fingerprint -> the message is stored twice in the overlap.
+    // With tzMinutes (getTimezoneOffset() sign: UTC-5 => 300) the import is
+    // anchored to UTC so the fingerprints MATCH and live-wins fires.
+    const tzFile = path.join(d, 'export-utc5.txt');
+    fs.writeFileSync(tzFile, '[6/6/24, 1:13:20 PM] Alice: lets discuss the budget tomorrow');
+    // The corresponding live record (real UTC epoch from the provider).
+    const liveUtc = { chatId:'c@g.us', ts: Math.floor(Date.parse('2024-06-06T18:13:20Z')/1000),
+      senderId:'Alice', text:'lets discuss the budget tomorrow', media:null, source:'live' };
+    const liveFp = D.fingerprint(liveUtc);
+    // (i) no hint -> parsed as UTC -> DIFFERENT bucket -> fingerprints do NOT match.
+    const noHint = m.parseWhatsAppExport(tzFile, { provider:'whatsapp', accountId:'work', chatId:'c@g.us' });
+    eq(noHint[0].fingerprint === liveFp, false, 'tz-no-hint-cross-source-forks (documented limitation)');
+    // (ii) tzMinutes:300 (UTC-5) -> anchored to UTC -> SAME bucket -> fingerprints MATCH.
+    const withHint = m.parseWhatsAppExport(tzFile, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', tzMinutes: 300 });
+    eq(withHint[0].fingerprint, liveFp, 'tz-hint-aligns-cross-source-fingerprint');
+    // And reconcile against the existing live record drops it (live wins, no dup).
+    const recTz = D.reconcileImport([{ ...liveUtc, msgId:'LIVE_TZ', fingerprint: liveFp }], withHint);
+    eq(recTz.added.length, 0, 'tz-hint-live-wins-no-duplicate-in-overlap');
+
     console.log(bad === 0 ? 'IMPORT OK' : 'IMPORT BAD ' + bad);
   });
 });

@@ -199274,7 +199274,7 @@ function parseHeader(line) {
   const [, date3, time3, ampm, rest] = m;
   return { date: date3, time: time3, ampm: ampm || null, rest };
 }
-function toEpochSeconds2(date3, time3, ampm) {
+function toEpochSeconds2(date3, time3, ampm, tzMinutes) {
   const [mo, da, yrRaw] = date3.split("/").map((n) => parseInt(n, 10));
   let yr = yrRaw;
   if (yr < 100) yr += 2e3;
@@ -199287,7 +199287,8 @@ function toEpochSeconds2(date3, time3, ampm) {
     if (pm && hr < 12) hr += 12;
     if (!pm && hr === 12) hr = 0;
   }
-  return Math.floor(Date.UTC(yr, mo - 1, da, hr, min, sec) / 1e3);
+  const tzAdj = Number.isFinite(tzMinutes) ? tzMinutes * 60 : 0;
+  return Math.floor(Date.UTC(yr, mo - 1, da, hr, min, sec) / 1e3) + tzAdj;
 }
 var MEDIA_MARKERS = [
   { re: /<Media omitted>/i, kind: "image" },
@@ -199312,7 +199313,7 @@ function classifyBody(body) {
   }
   return { kind: "text", text: body };
 }
-function parseWhatsAppExport(filePath, { provider, accountId, chatId } = {}) {
+function parseWhatsAppExport(filePath, { provider, accountId, chatId, tzMinutes } = {}) {
   const content = fs7.readFileSync(filePath, "utf8");
   const lines = content.replace(/\r\n/g, "\n").split("\n");
   const out = [];
@@ -199331,7 +199332,7 @@ ${line}` : line;
     }
     finalize2(cur);
     cur = null;
-    const ts = toEpochSeconds2(header.date, header.time, header.ampm);
+    const ts = toEpochSeconds2(header.date, header.time, header.ampm, tzMinutes);
     const { sender, body } = splitSender(header.rest);
     let kind, text, senderId, senderName;
     if (sender === null) {
@@ -199422,8 +199423,8 @@ var TOOL_DEFS = [
   },
   {
     name: "comms_import_history",
-    description: "Parse a WhatsApp 'Export chat' .txt and reconcile it into the store by fingerprint.",
-    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, chatId: { type: "string" }, filePath: { type: "string" }, project_dir: PROJ }, required: ["provider", "accountId", "chatId", "filePath"] }
+    description: "Parse a WhatsApp 'Export chat' .txt and reconcile it into the store by fingerprint. Optional tzMinutes aligns the export's local-clock timestamps to UTC (getTimezoneOffset() sign: UTC-5 => 300) so cross-source dedupe collides.",
+    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, chatId: { type: "string" }, filePath: { type: "string" }, tzMinutes: { type: "number" }, project_dir: PROJ }, required: ["provider", "accountId", "chatId", "filePath"] }
   },
   {
     name: "comms_sync_now",
@@ -199542,7 +199543,11 @@ function buildServer({ registry: registry2, env = process.env } = {}) {
           const parsed = parseWhatsAppExport(args.filePath, {
             provider: args.provider,
             accountId: args.accountId,
-            chatId
+            chatId,
+            // Optional: align the export's local wall-clock to UTC so an imported
+            // line and the same live-captured message share a minute bucket ->
+            // same fingerprint -> §4.2 live-wins fires (no dup in the overlap).
+            tzMinutes: Number.isFinite(args.tzMinutes) ? args.tzMinutes : void 0
           });
           const { merged, added } = reconcileImport(existing, parsed);
           for (const m of added) appendMessage(projectDir, m);
