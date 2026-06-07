@@ -1237,14 +1237,14 @@ rm -rf "$CR_REPO" "$_CR_DUP_REPO" "$_CR_DUP2_REPO"
 # Phase 5: comms init-gate, idempotent gitignore, state files, slash commands
 # ============================================================================
 
-# ---- T44: comms_state writers + read side used by the hook ------------------
+# ---- T55: comms_state writers + read side used by the hook ------------------
 echo
-echo "T44 — comms_state: setAccountStatus + setSeen + read side"
-C44REPO="$(mktemp -d -t continuum-synth-c44.XXXXXX)"
-mkdir -p "$C44REPO/.continuum/comms"
-T44_OUT=$(node -e "
+echo "T55 — comms_state: setAccountStatus + setSeen + read side"
+C55REPO="$(mktemp -d -t continuum-synth-c55.XXXXXX)"
+mkdir -p "$C55REPO/.continuum/comms"
+T55_OUT=$(node -e "
 import('$PLUGIN_DIR/lib/comms_state.js').then((m) => {
-  const d = '$C44REPO';
+  const d = '$C55REPO';
   // MCP writes link status:
   m.setAccountStatus(d, 'whatsapp', 'work', 'connected');
   m.setAccountStatus(d, 'whatsapp', 'home', 'needs_login');
@@ -1260,15 +1260,15 @@ import('$PLUGIN_DIR/lib/comms_state.js').then((m) => {
   const seen = m.readSeen(d);
   const seen_ok = seen['whatsapp/work/123@g.us'] === 1717700000;
   // absent files degrade to empty objects (hook must not throw):
-  const emptySt = m.readState('/tmp/no-such-dir-c44');
-  const emptySeen = m.readSeen('/tmp/no-such-dir-c44');
+  const emptySt = m.readState('/tmp/no-such-dir-c55');
+  const emptySeen = m.readSeen('/tmp/no-such-dir-c55');
   const empty_ok = JSON.stringify(emptySt)==='{}' && JSON.stringify(emptySeen)==='{}';
   console.log((status_ok && flat_ok && seen_ok && empty_ok) ? 'STATE OK'
     : 'STATE BAD st='+status_ok+' flat='+flat_ok+' seen='+seen_ok+' empty='+empty_ok);
 }).catch(e => console.log('STATE THREW', e.message));
 ")
-echo "$T44_OUT" | grep -qF "STATE OK" && ok "comms_state writers + read side correct" || { fail "comms_state: $T44_OUT"; }
-rm -rf "$C44REPO"
+echo "$T55_OUT" | grep -qF "STATE OK" && ok "comms_state writers + read side correct" || { fail "comms_state: $T55_OUT"; }
+rm -rf "$C55REPO"
 
 # ---- Summary -----------------------------------------------------------------
 echo
