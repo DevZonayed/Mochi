@@ -8,6 +8,25 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.6.1] — 2026-06-07
+
+### Changed
+
+- **Popup: the "Send test notification" button is now always visible.** It was
+  previously tucked inside the first-run onboarding card and disappeared once a
+  user confirmed notifications worked. It now sits permanently in the
+  **Notifications** section (under the on/off toggle), fires a test toast
+  regardless of the toggle state, and surfaces a Chrome-level "notifications
+  switched off" warning when applicable. No new tools (count stays 61).
+
+### Notes
+
+- Patch release so the distributed plugin cache carries the always-visible
+  test button. As with 0.5.0+, applying the extension changes requires a
+  one-time **reload of the unpacked extension** from the new cache path.
+
+---
+
 ## [0.6.0] — 2026-06-07
 
 QA-truth release. The browser tools stop trusting "it rendered" and start
