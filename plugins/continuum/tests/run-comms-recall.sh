@@ -182,6 +182,89 @@ import('$PLUGIN_DIR/lib/comms_recall.js').then(({commsRecall}) => {
 ")
 [ "$ERR_MISSING" = "THREW_OK" ] && ok "missing query throws 'query required'" || fail "expected THREW_OK got $ERR_MISSING"
 
+# ---- C11: duplicate/equivalent allowlist entries do not inflate hits --------
+# A device-suffixed variant ('19999999999:12@s.whatsapp.net') alongside the
+# base JID ('19999999999@s.whatsapp.net') both normalize to the same chatId.
+# Without dedup, the shard would be scanned twice and hitCount would be 2 for
+# a single stored message. The same applies to verbatim duplicate entries.
+echo
+echo "C11 — duplicate/equivalent allowlist entries don't inflate hitCount"
+# Build a temporary repo with a config that lists the DM JID twice:
+# once as its base form and once with a device suffix (both normalize identically).
+DUP_REPO="$(mktemp -d -t comms-recall-dup.XXXXXX)"
+mkdir -p "$DUP_REPO/.continuum/comms/store/whatsapp/work/$ALLOWED_DM"
+cat > "$DUP_REPO/.continuum/comms/config.json" <<DUPEOF
+{
+  "version": 1,
+  "decided": true,
+  "declined": false,
+  "providers": {
+    "whatsapp": {
+      "accounts": {
+        "work": {
+          "capture": "session",
+          "mode": "strict",
+          "allowed_jids": ["$ALLOWED_DM", "19999999999:12@s.whatsapp.net"]
+        }
+      }
+    }
+  }
+}
+DUPEOF
+# Seed exactly ONE message in the shard.
+printf '{"provider":"whatsapp","accountId":"work","chatId":"%s","msgId":"DUP1","fingerprint":"fp:DUP1","fromMe":false,"senderId":"%s","senderName":"Carol","ts":1717700100,"tsIso":"2026-06-06T18:15:00Z","kind":"text","text":"postgres migration","media":null,"reply_to":null,"source":"live"}\n' \
+  "$ALLOWED_DM" "$ALLOWED_DM" >> "$DUP_REPO/.continuum/comms/store/whatsapp/work/$ALLOWED_DM/messages.jsonl"
+
+DUP_CALL() {
+  node -e "
+import('$PLUGIN_DIR/lib/comms_recall.js').then(({commsRecall}) => {
+  const opts = JSON.parse(process.argv[1]);
+  const r = commsRecall('$DUP_REPO', opts);
+  console.log(JSON.stringify(r));
+}).catch((e) => { console.log('ERR:' + e.message); process.exit(1); });
+" "$1"
+}
+
+# (a) device-suffix variant: two allowlist entries that normalize to the same JID
+R11A=$(DUP_CALL '{"query":"postgres"}')
+HC11A=$(echo "$R11A" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$HC11A" = "1" ] && ok "device-suffix dup in allowlist: hitCount==1 (not inflated)" || { fail "expected hitCount 1 got $HC11A (shard scanned twice)"; echo "  $R11A"; }
+
+# (b) verbatim duplicate: same JID listed twice in allowed_jids
+DUP2_REPO="$(mktemp -d -t comms-recall-dup2.XXXXXX)"
+mkdir -p "$DUP2_REPO/.continuum/comms/store/whatsapp/work/$ALLOWED_DM"
+cat > "$DUP2_REPO/.continuum/comms/config.json" <<DUP2EOF
+{
+  "version": 1,
+  "decided": true,
+  "declined": false,
+  "providers": {
+    "whatsapp": {
+      "accounts": {
+        "work": {
+          "capture": "session",
+          "mode": "strict",
+          "allowed_jids": ["$ALLOWED_DM", "$ALLOWED_DM"]
+        }
+      }
+    }
+  }
+}
+DUP2EOF
+printf '{"provider":"whatsapp","accountId":"work","chatId":"%s","msgId":"DUP2","fingerprint":"fp:DUP2","fromMe":false,"senderId":"%s","senderName":"Carol","ts":1717700100,"tsIso":"2026-06-06T18:15:00Z","kind":"text","text":"postgres migration","media":null,"reply_to":null,"source":"live"}\n' \
+  "$ALLOWED_DM" "$ALLOWED_DM" >> "$DUP2_REPO/.continuum/comms/store/whatsapp/work/$ALLOWED_DM/messages.jsonl"
+
+R11B=$(node -e "
+import('$PLUGIN_DIR/lib/comms_recall.js').then(({commsRecall}) => {
+  const r = commsRecall('$DUP2_REPO', {query:'postgres'});
+  console.log(JSON.stringify(r));
+}).catch((e) => { console.log('ERR:' + e.message); process.exit(1); });
+")
+HC11B=$(echo "$R11B" | python3 -c "import json,sys; print(json.load(sys.stdin)['hitCount'])")
+[ "$HC11B" = "1" ] && ok "verbatim-duplicate JID in allowlist: hitCount==1 (not inflated)" || { fail "expected hitCount 1 got $HC11B (shard scanned twice)"; echo "  $R11B"; }
+
+rm -rf "$DUP_REPO" "$DUP2_REPO"
+
 # ---- Summary ---------------------------------------------------------------
 echo
 echo "─────────────────────────────"
