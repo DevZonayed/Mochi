@@ -813,6 +813,32 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
     eq(cur.oldestId, 'M1', 'oldest-id');
     eq(cur.oldestTs, 1717700000, 'oldest-ts');
 
+    // EDGE CASE (a): two distinct same-source live messages with identical content
+    // in the same minute. Each has a distinct real msgId (cleared Tier 1). Tier 2
+    // must NOT suppress the second — they are genuinely different user messages
+    // (e.g. user texted 'ok' then 'ok' again). Both must be appended and counted.
+    const base2 = { ...base, chatId:'c2@g.us' }; // separate chat to avoid cross-test pollution
+    const rA = m.appendMessage(d, withFp({ ...base2, msgId:'REAL_AAA', ts:1717700005, text:'ok', source:'live' }));
+    eq(rA.appended, true, 'same-src-dup-text-first-appended');
+    eq(m.readCursor(d,'whatsapp','work','c2@g.us').count, 1, 'same-src-count-1');
+    // second 'ok' in same minute — same fingerprint, distinct msgId, same source
+    const rB = m.appendMessage(d, withFp({ ...base2, msgId:'REAL_BBB', ts:1717700015, text:'ok', source:'live' }));
+    eq(rB.appended, true, 'same-src-dup-text-second-NOT-dropped');
+    eq(m.readCursor(d,'whatsapp','work','c2@g.us').count, 2, 'same-src-count-2-both-appended');
+
+    // EDGE CASE (b): import stored first, then live record of same logical message
+    // arrives (reverse live-wins). Per spec §4.2 live wins unconditionally; the
+    // live record must be appended, count must advance.
+    const base3 = { ...base, chatId:'c3@g.us' };
+    // Step 1: import stored first (simulates history import before live delivery)
+    const rImp = m.appendMessage(d, withFp({ ...base3, msgId:'import:hist', ts:1717700200, text:'hello', source:'import' }));
+    eq(rImp.appended, true, 'reverse-lw-import-first-appended');
+    eq(m.readCursor(d,'whatsapp','work','c3@g.us').count, 1, 'reverse-lw-count-1');
+    // Step 2: live re-delivery of the same logical message arrives later
+    const rLive = m.appendMessage(d, withFp({ ...base3, msgId:'LIVE_ZZZ', ts:1717700210, text:'hello', source:'live' }));
+    eq(rLive.appended, true, 'reverse-lw-live-wins-appended');
+    eq(m.readCursor(d,'whatsapp','work','c3@g.us').count, 2, 'reverse-lw-count-2-live-wins');
+
     console.log(bad === 0 ? 'APPEND OK' : 'APPEND BAD ' + bad);
   });
 });
