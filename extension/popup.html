@@ -260,30 +260,28 @@
           <span class="track"><span class="thumb"></span></span>
         </label>
       </div>
-      <div id="notif-onboard" style="display:none; margin-top:6px;">
-        <div class="empty-state" id="notif-onboard-text" style="padding-top:2px;">
-          Let Mochi tap you on the shoulder when it needs you — instead of jumping in front of your work.
-        </div>
-        <button class="btn" id="notif-test-btn" style="width:100%; margin-top:6px;">Send test notification</button>
-        <div id="notif-confirm" style="display:none; margin-top:8px;">
-          <div class="empty-state" style="padding-top:0;">Did a notification appear in the corner of your screen?</div>
-          <div style="display:flex; gap:8px; margin-top:6px;">
-            <button class="btn primary" id="notif-yes-btn" style="flex:1;">Yes, I saw it</button>
-            <button class="btn" id="notif-no-btn" style="flex:1;">No</button>
-          </div>
-        </div>
-        <div id="notif-help" style="display:none; margin-top:8px;">
-          <div class="empty-state" style="padding-top:0; line-height:1.5;">
-            macOS is hiding Chrome's notifications. To fix it:
-            <br/>1. Click <b>Open notification settings</b>
-            <br/>2. Find <b>Google Chrome</b> in the list
-            <br/>3. Turn on <b>Allow Notifications</b>
-            <br/>4. Come back and tap <b>Send test notification</b> again
-          </div>
-          <button class="btn primary" id="notif-open-settings-btn" style="width:100%; margin-top:6px;">Open notification settings</button>
-        </div>
-        <div class="status" id="notif-status" style="margin-top:6px;"></div>
+      <div class="empty-state" id="notif-perm-warn" style="display:none; padding-top:2px; color:var(--danger);">
+        Chrome has notifications switched off. Turn them on, then test again.
       </div>
+      <button class="btn primary" id="notif-test-btn" style="width:100%; margin-top:8px;">🔔 Send test notification</button>
+      <div id="notif-confirm" style="display:none; margin-top:8px;">
+        <div class="empty-state" style="padding-top:0;">Did a notification appear in the corner of your screen?</div>
+        <div style="display:flex; gap:8px; margin-top:6px;">
+          <button class="btn primary" id="notif-yes-btn" style="flex:1;">Yes, I saw it</button>
+          <button class="btn" id="notif-no-btn" style="flex:1;">No</button>
+        </div>
+      </div>
+      <div id="notif-help" style="display:none; margin-top:8px;">
+        <div class="empty-state" style="padding-top:0; line-height:1.5;">
+          macOS is hiding Chrome's notifications. To fix it:
+          <br/>1. Click <b>Open notification settings</b>
+          <br/>2. Find <b>Google Chrome</b> in the list
+          <br/>3. Turn on <b>Allow Notifications</b>
+          <br/>4. Come back and tap <b>Send test notification</b> again
+        </div>
+        <button class="btn primary" id="notif-open-settings-btn" style="width:100%; margin-top:6px;">Open notification settings</button>
+      </div>
+      <div class="status" id="notif-status" style="margin-top:6px;"></div>
     </div>
 
     <div class="section">
