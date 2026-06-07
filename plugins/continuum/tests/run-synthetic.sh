@@ -623,6 +623,18 @@ import('$PLUGIN_DIR/lib/comms_allowlist.js').then((m) => {
   let threw = false; try { m.assertAllowed(cfg,'whatsapp','work','nope@s.whatsapp.net'); } catch { threw = true; }
   eq(threw, true, 'assert-throws-when-denied');
 
+  // empty-JID bypass guard: an empty/blank entry in allowed_jids must NOT grant
+  // access to null/empty/garbage jids (security invariant — §6.4 guard must not
+  // trust its own allow-list contents).
+  const cfgEmpty = { version:1, decided:true, declined:false, providers:{ whatsapp:{ accounts:{
+    work:{ capture:'session', mode:'strict', allowed_jids:['', '   ', '123-456@g.us'] }
+  }}}};
+  eq(m.isAllowed(cfgEmpty,'whatsapp','work',''), false, 'empty-jid-not-granted-by-empty-entry');
+  eq(m.isAllowed(cfgEmpty,'whatsapp','work',null), false, 'null-jid-not-granted-by-empty-entry');
+  eq(m.isAllowed(cfgEmpty,'whatsapp','work','123-456@g.us'), true, 'valid-jid-still-allowed-alongside-empty-entries');
+  let threwEmpty = false; try { m.assertAllowed(cfgEmpty,'whatsapp','work',''); } catch { threwEmpty = true; }
+  eq(threwEmpty, true, 'assertAllowed-throws-on-empty-jid-even-with-empty-entry');
+
   console.log(bad === 0 ? 'ALLOW OK' : 'ALLOW BAD ' + bad);
 });
 ")
