@@ -38,8 +38,8 @@ const TOOL_DEFS = [
     inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, chatId: { type: "string" }, limit: { type: "number" }, anchor: { type: "string" }, before: { type: "number" }, after: { type: "number" }, continuation: { type: "string" }, project_dir: PROJ }, required: ["provider", "accountId", "chatId"] } },
   { name: "comms_recall", description: "Stemmed-token search over the comms store; returns scored snippets with msgId handles (bounded).",
     inputSchema: { type: "object", properties: { query: { type: "string" }, provider: { type: "string" }, accountId: { type: "string" }, chatId: { type: "string" }, since: { type: "number" }, until: { type: "number" }, limit: { type: "number" }, project_dir: PROJ }, required: ["query"] } },
-  { name: "comms_import_history", description: "Parse a WhatsApp 'Export chat' .txt and reconcile it into the store by fingerprint.",
-    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, chatId: { type: "string" }, filePath: { type: "string" }, project_dir: PROJ }, required: ["provider", "accountId", "chatId", "filePath"] } },
+  { name: "comms_import_history", description: "Parse a WhatsApp 'Export chat' .txt and reconcile it into the store by fingerprint. Optional tzMinutes aligns the export's local-clock timestamps to UTC (getTimezoneOffset() sign: UTC-5 => 300) so cross-source dedupe collides.",
+    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, chatId: { type: "string" }, filePath: { type: "string" }, tzMinutes: { type: "number" }, project_dir: PROJ }, required: ["provider", "accountId", "chatId", "filePath"] } },
   { name: "comms_sync_now", description: "Force a connect + best-effort backfill pass for an account.",
     inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, project_dir: PROJ }, required: ["provider", "accountId"] } },
 ];
@@ -143,6 +143,10 @@ export function buildServer({ registry, env = process.env } = {}) {
           const existing = readAllMessages(projectDir, args.provider, args.accountId, chatId);
           const parsed = parseWhatsAppExport(args.filePath, {
             provider: args.provider, accountId: args.accountId, chatId,
+            // Optional: align the export's local wall-clock to UTC so an imported
+            // line and the same live-captured message share a minute bucket ->
+            // same fingerprint -> §4.2 live-wins fires (no dup in the overlap).
+            tzMinutes: Number.isFinite(args.tzMinutes) ? args.tzMinutes : undefined,
           });
           const { merged, added } = reconcileImport(existing, parsed);
           for (const m of added) appendMessage(projectDir, m);

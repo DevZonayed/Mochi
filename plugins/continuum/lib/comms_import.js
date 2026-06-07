@@ -49,12 +49,28 @@ function parseHeader(line) {
   return { date, time, ampm: ampm || null, rest };
 }
 
-// m/d/yy(yy), h:mm(:ss)?, optional AM/PM -> epoch seconds (UTC).
+// m/d/yy(yy), h:mm(:ss)?, optional AM/PM -> epoch seconds.
 // Two-digit years map to 2000+. Timestamps are minute-resolution per the export
 // format; seconds are parsed when the bracketed variant supplies them, else 0.
-// (The dedupe fingerprint buckets by minute regardless, so this never forks
-// identity — it only sharpens read-time ordering.)
-function toEpochSeconds(date, time, ampm) {
+//
+// TIMEZONE: a WhatsApp "Export chat" .txt writes timestamps in the exporting
+// DEVICE'S LOCAL timezone and carries NO tz marker, whereas live/backfill
+// records carry a real UTC epoch from the provider. So the export's clock value
+// is wall-clock LOCAL time. `tzMinutes` is the caller-supplied offset of that
+// local clock from UTC, in minutes (the JS `getTimezoneOffset()` sign: minutes
+// that must be ADDED to local to reach UTC — e.g. UTC-5 => +300, UTC+2 => -120).
+// With it we anchor the parsed wall-clock to UTC so an imported line and the
+// same live-captured message land in the SAME floor(ts/60) bucket -> same
+// fingerprint -> the §4.2 live-wins tie-break fires and the message is NOT
+// stored twice in the live/import overlap window.
+//
+// When `tzMinutes` is null/undefined the wall-clock is parsed AS-IF UTC (the
+// historical behavior, preserved for callers that pass no hint). NOTE the limit
+// this leaves: for a non-UTC user with no hint, import-vs-import idempotency
+// still holds (all imports share the same skew), but cross-source live-vs-import
+// dedupe will NOT collide — the duplicate appears only in the live/import
+// overlap region. Pass `tzMinutes` to close that gap.
+function toEpochSeconds(date, time, ampm, tzMinutes) {
   const [mo, da, yrRaw] = date.split("/").map((n) => parseInt(n, 10));
   let yr = yrRaw;
   if (yr < 100) yr += 2000;
@@ -67,7 +83,11 @@ function toEpochSeconds(date, time, ampm) {
     if (pm && hr < 12) hr += 12;
     if (!pm && hr === 12) hr = 0;
   }
-  return Math.floor(Date.UTC(yr, mo - 1, da, hr, min, sec) / 1000);
+  // Date.UTC treats the components as UTC wall-clock. Adding tzMinutes*60
+  // converts a LOCAL wall-clock to the corresponding UTC instant (the offset
+  // uses getTimezoneOffset() sign: +300 for UTC-5, so local 13:13 -> 18:13 UTC).
+  const tzAdj = Number.isFinite(tzMinutes) ? tzMinutes * 60 : 0;
+  return Math.floor(Date.UTC(yr, mo - 1, da, hr, min, sec) / 1000) + tzAdj;
 }
 
 // Attachment / media markers WhatsApp writes in the text export. The real bytes
@@ -97,12 +117,18 @@ function classifyBody(body) {
   return { kind: "text", text: body };
 }
 
-// parseWhatsAppExport(filePath, {provider, accountId, chatId}) -> Msg[]
+// parseWhatsAppExport(filePath, {provider, accountId, chatId, tzMinutes}) -> Msg[]
 // Emits the §4.1 normalized shape per the import contract. The msgId/fingerprint
 // set here are provisional (the canonical synthetic msgId is minted by
 // reconcileImport); fingerprint is precomputed so a direct appendMessage of a
 // parsed record (without reconcile) still dedupes correctly.
-export function parseWhatsAppExport(filePath, { provider, accountId, chatId } = {}) {
+//
+// `tzMinutes` (optional): offset of the export's local wall-clock from UTC, in
+// `getTimezoneOffset()`-sign minutes (UTC-5 => +300). Aligns import timestamps
+// to the provider's UTC epoch so cross-source (live-vs-import) dedupe collides
+// in the live/import overlap window. Omit to parse wall-clock as UTC (the
+// historical behavior; see toEpochSeconds for the limitation that leaves).
+export function parseWhatsAppExport(filePath, { provider, accountId, chatId, tzMinutes } = {}) {
   const content = fs.readFileSync(filePath, "utf8");
   // Normalize CRLF; do NOT drop blank lines yet — a blank line inside a message
   // is a legitimate continuation (multi-paragraph message).
@@ -131,7 +157,7 @@ export function parseWhatsAppExport(filePath, { provider, accountId, chatId } = 
     finalize(cur);
     cur = null;
 
-    const ts = toEpochSeconds(header.date, header.time, header.ampm);
+    const ts = toEpochSeconds(header.date, header.time, header.ampm, tzMinutes);
     const { sender, body } = splitSender(header.rest);
 
     let kind, text, senderId, senderName;
