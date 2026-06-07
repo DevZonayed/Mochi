@@ -125,12 +125,12 @@ loadVisuals();
 
 // ---------- Notifications ----------
 const notifEls = {
-  sw:      () => document.getElementById("notif-switch"),
-  onboard: () => document.getElementById("notif-onboard"),
-  test:    () => document.getElementById("notif-test-btn"),
-  confirm: () => document.getElementById("notif-confirm"),
-  help:    () => document.getElementById("notif-help"),
-  status:  () => document.getElementById("notif-status"),
+  sw:       () => document.getElementById("notif-switch"),
+  test:     () => document.getElementById("notif-test-btn"),
+  confirm:  () => document.getElementById("notif-confirm"),
+  help:     () => document.getElementById("notif-help"),
+  status:   () => document.getElementById("notif-status"),
+  permWarn: () => document.getElementById("notif-perm-warn"),
 };
 
 async function refreshNotif() {
@@ -139,29 +139,9 @@ async function refreshNotif() {
   if (!res) return;
   const sw = notifEls.sw();
   if (sw && document.activeElement !== sw) sw.checked = !!res.enabled;
-
-  // Chrome's own notification permission ("denied" = blocked at the browser
-  // level, distinct from the macOS toggle). Re-show onboarding if it's denied
-  // even after a prior verify, so a later revocation isn't a silent dead end.
-  const denied = res.permission === "denied";
-  const show = res.enabled && (!res.verified || denied);
-  notifEls.onboard().style.display = show ? "block" : "none";
-
-  // When the card is hidden, reset the sub-flow so it reopens clean (no stale
-  // "Did you see it?" / help panel from a previous, abandoned attempt).
-  if (!show) {
-    notifEls.confirm().style.display = "none";
-    notifEls.help().style.display = "none";
-    notifEls.status().textContent = "";
-  }
-
-  // Tailor the lead text to the detectable cause.
-  const lead = document.getElementById("notif-onboard-text");
-  if (lead) {
-    lead.textContent = denied
-      ? "Chrome has notifications switched off for Mochi. Turn them on, then send a test."
-      : "Let Mochi tap you on the shoulder when it needs you — instead of jumping in front of your work.";
-  }
+  // Surface a warning if Chrome itself is blocking notifications ("denied" is
+  // the browser-level setting, distinct from the macOS toggle).
+  notifEls.permWarn().style.display = (res.permission === "denied") ? "block" : "none";
 }
 
 notifEls.sw().addEventListener("change", async (e) => {
@@ -169,11 +149,19 @@ notifEls.sw().addEventListener("change", async (e) => {
   refreshNotif();
 });
 
+// Always-available manual test. Fires a real toast regardless of the on/off
+// toggle, then asks the user to confirm they saw it.
 notifEls.test().addEventListener("click", async () => {
-  notifEls.status().textContent = "";
-  await chrome.runtime.sendMessage({ type: "popup_send_test_notification" });
-  notifEls.confirm().style.display = "block";
+  notifEls.status().className = "status";
+  notifEls.status().textContent = "Sent — look at the top-right corner of your screen.";
   notifEls.help().style.display = "none";
+  const r = await chrome.runtime.sendMessage({ type: "popup_send_test_notification" });
+  if (r && r.ok === false) {
+    notifEls.status().className = "status err";
+    notifEls.status().textContent = "Couldn't send a notification — check the service-worker console.";
+    return;
+  }
+  notifEls.confirm().style.display = "block";
 });
 
 document.getElementById("notif-yes-btn").addEventListener("click", async () => {
