@@ -170,35 +170,12 @@ export function appendMessage(projectDir, msg) {
 const DEFAULT_LIMIT = 20;
 const HARD_MAX_LIMIT = 200;     // §4.3 — over-limit requests are CLAMPED, not honored
 const DEFAULT_BYTE_BUDGET = 16 * 1024; // ~16 KB per response (§4.3)
+const DEFAULT_ANCHOR_SIDE = 10; // §4.3 — anchored `before`/`after` default per side
 
-// getSlice: latest-N (or windowed) read of a chat. Order is reconstructed at
-// READ time by ts DESC (newest-first) by default. Caps are server-side
-// invariants: limit defaults to 20, is HARD-clamped to 200, and the response
-// is truncated to a byte budget with a `continuation` cursor for the next page.
-// `continuation` is an opaque "before this ts/msgId" cursor (we encode ts:msgId).
-export function getSlice(projectDir, opts) {
-  const { provider, accountId, chatId } = opts;
-  const limitApplied = Math.min(
-    HARD_MAX_LIMIT,
-    Number.isFinite(opts.limit) && opts.limit > 0 ? Math.floor(opts.limit) : DEFAULT_LIMIT
-  );
-  const byteBudget = Number.isFinite(opts.byteBudget) && opts.byteBudget > 0
-    ? opts.byteBudget : DEFAULT_BYTE_BUDGET;
-
-  let all = readAllMessages(projectDir, provider, accountId, chatId);
-  // newest-first by ts; msgId is a stable tiebreaker for equal ts.
-  all.sort((a, b) => (b.ts || 0) - (a.ts || 0) || String(b.msgId).localeCompare(String(a.msgId)));
-
-  // continuation: resume strictly older than the encoded cursor.
-  if (typeof opts.continuation === "string" && opts.continuation.includes(":")) {
-    const sep = opts.continuation.indexOf(":");
-    const curTs = Number(opts.continuation.slice(0, sep));
-    const curId = opts.continuation.slice(sep + 1);
-    all = all.filter((m) =>
-      (m.ts || 0) < curTs || ((m.ts || 0) === curTs && String(m.msgId).localeCompare(curId) < 0)
-    );
-  }
-
+// _applyBudget: drain `all` (already in final emit order) into a bounded output
+// respecting the limit clamp + byte budget, emitting a `continuation` cursor when
+// truncated. Shared by every getSlice path so caps are a single invariant.
+function _applyBudget(all, limitApplied, byteBudget) {
   const out = [];
   let bytes = 0;
   let continuation = null;
@@ -215,7 +192,83 @@ export function getSlice(projectDir, opts) {
     out.push(m);
     bytes += sz;
   }
+  return { out, continuation };
+}
 
+// getSlice: latest-N or windowed read of a chat. Order is reconstructed at READ
+// time by ts. Three modes (caps are server-side invariants in ALL of them —
+// limit clamps to 200, byte budget truncates with a `continuation` cursor):
+//
+//   1. ANCHORED (opts.anchor = a msgId): the recall-expand path (§4.3, C5). After
+//      the ts-DESC sort, locate the anchor and return up to `before` (default 10)
+//      OLDER + the anchor + up to `after` (default 10) NEWER messages, emitted in
+//      ts ASC order (oldest→newest, a readable timeline). Per-side counts and the
+//      total are clamped to HARD_MAX. Anchor not found → empty result (no throw).
+//   2. TS-BOUND (no anchor, but `before`/`after` given as epoch-second bounds):
+//      filter to `ts <= before` and/or `ts >= after`, then latest-N within bounds.
+//   3. LATEST-N (default): newest-first, limit defaults to 20.
+//
+// `continuation` is an opaque "before this ts/msgId" cursor (we encode ts:msgId)
+// for the paging modes; the anchored window is bounded by design and does not page.
+export function getSlice(projectDir, opts) {
+  const { provider, accountId, chatId } = opts;
+  const limitApplied = Math.min(
+    HARD_MAX_LIMIT,
+    Number.isFinite(opts.limit) && opts.limit > 0 ? Math.floor(opts.limit) : DEFAULT_LIMIT
+  );
+  const byteBudget = Number.isFinite(opts.byteBudget) && opts.byteBudget > 0
+    ? opts.byteBudget : DEFAULT_BYTE_BUDGET;
+
+  let all = readAllMessages(projectDir, provider, accountId, chatId);
+  // newest-first by ts; msgId is a stable tiebreaker for equal ts.
+  all.sort((a, b) => (b.ts || 0) - (a.ts || 0) || String(b.msgId).localeCompare(String(a.msgId)));
+
+  // ---- Mode 1: anchored window around a msgId -------------------------------
+  if (opts.anchor != null && opts.anchor !== "") {
+    const idx = all.findIndex((m) => String(m.msgId) === String(opts.anchor));
+    if (idx < 0) return { messages: [], limitApplied, continuation: null };
+
+    // `all` is newest-first, so NEWER messages sit at LOWER indices and OLDER at
+    // HIGHER indices. Clamp each side count to HARD_MAX (and the total via slice).
+    const beforeN = Math.min(
+      HARD_MAX_LIMIT,
+      Number.isFinite(opts.before) && opts.before >= 0 ? Math.floor(opts.before) : DEFAULT_ANCHOR_SIDE
+    );
+    const afterN = Math.min(
+      HARD_MAX_LIMIT,
+      Number.isFinite(opts.after) && opts.after >= 0 ? Math.floor(opts.after) : DEFAULT_ANCHOR_SIDE
+    );
+    const newerStart = Math.max(0, idx - afterN);      // up to afterN newer (toward index 0)
+    const olderEnd = idx + 1 + beforeN;                // up to beforeN older (toward the tail)
+    const window = all.slice(newerStart, olderEnd);    // still newest-first
+    window.reverse();                                  // → ts ASC (oldest → newest) timeline
+
+    // Apply HARD_MAX + byte budget across the assembled window.
+    const { out } = _applyBudget(window, HARD_MAX_LIMIT, byteBudget);
+    return { messages: out, limitApplied, continuation: null };
+  }
+
+  // ---- Mode 2: ts-bound filtering (no anchor) -------------------------------
+  // `before`/`after` are epoch-second bounds here: ts <= before, ts >= after.
+  if (Number.isFinite(opts.before)) {
+    all = all.filter((m) => (m.ts || 0) <= opts.before);
+  }
+  if (Number.isFinite(opts.after)) {
+    all = all.filter((m) => (m.ts || 0) >= opts.after);
+  }
+
+  // continuation: resume strictly older than the encoded cursor.
+  if (typeof opts.continuation === "string" && opts.continuation.includes(":")) {
+    const sep = opts.continuation.indexOf(":");
+    const curTs = Number(opts.continuation.slice(0, sep));
+    const curId = opts.continuation.slice(sep + 1);
+    all = all.filter((m) =>
+      (m.ts || 0) < curTs || ((m.ts || 0) === curTs && String(m.msgId).localeCompare(curId) < 0)
+    );
+  }
+
+  // ---- Mode 3: latest-N (default) -------------------------------------------
+  const { out, continuation } = _applyBudget(all, limitApplied, byteBudget);
   return { messages: out, limitApplied, continuation };
 }
 

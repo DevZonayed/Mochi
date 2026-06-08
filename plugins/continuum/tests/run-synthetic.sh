@@ -960,6 +960,77 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
 echo "$T42_OUT" | grep -qF "SLICE OK" && ok "comms_store getSlice sort/clamp/byte-budget/continuation" || { fail "comms_store slice: $T42_OUT"; }
 rm -rf "$SL_REPO"
 
+# ---- T42b: comms_store getSlice — anchored window + ts-bound filters --------
+echo
+echo "T42b — comms_store getSlice honors anchor/before/after (anchored window)"
+SLA_REPO="$(mktemp -d -t continuum-synth-sla.XXXXXX)"
+T42B_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
+  import('$PLUGIN_DIR/lib/comms_dedupe.js').then((D) => {
+    const d = '$SLA_REPO';
+    let bad = 0;
+    const eq = (a,b,label) => { if (a!==b) { console.log('FAIL',label,'got',a,'want',b); bad++; } };
+    const base = { provider:'whatsapp', accountId:'work', chatId:'c@g.us', fromMe:false, senderId:'19999999999@s.whatsapp.net', senderName:'Alice', kind:'text', media:null, reply_to:null, source:'live' };
+    // append 50 messages, ts 1000..1049 (insert OUT of order to prove read-sort)
+    for (const i of [25,0,49,10,...[...Array(50).keys()]]) {
+      const o = { ...base, msgId:'M'+i, ts:1000+i, tsIso:new Date((1000+i)*1000).toISOString(), text:'msg '+i };
+      m.appendMessage(d, { ...o, fingerprint: D.fingerprint(o) });
+    }
+
+    // (a) anchored window: anchor=M25 with before=3, after=2 -> 3 older + anchor + 2 newer,
+    //     returned in ts ASC order (oldest -> newest): M22,M23,M24,M25,M26,M27.
+    const w = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', anchor:'M25', before:3, after:2 });
+    eq(w.messages.length, 6, 'anchor-window-count');
+    eq(w.messages.map(x=>x.msgId).join(','), 'M22,M23,M24,M25,M26,M27', 'anchor-window-order-ts-asc');
+
+    // (b) anchored window defaults: before/after default to 10 each (+ anchor = 21).
+    const wd = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', anchor:'M25' });
+    eq(wd.messages.length, 21, 'anchor-default-before-after-10');
+    eq(wd.messages[0].msgId, 'M15', 'anchor-default-oldest-M15');
+    eq(wd.messages[wd.messages.length-1].msgId, 'M35', 'anchor-default-newest-M35');
+    eq(wd.messages[10].msgId, 'M25', 'anchor-is-centered');
+
+    // (c) clamp near edges: anchor=M1 with before=10 -> only M0 available below it.
+    const wlo = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', anchor:'M1', before:10, after:0 });
+    eq(wlo.messages.map(x=>x.msgId).join(','), 'M0,M1', 'anchor-clamps-at-bottom-edge');
+
+    // (d) HARD_MAX clamp: before/after asked huge -> total clamped to <= 200 (here 50 exist).
+    // Generous byteBudget so the byte-budget gate (a separate invariant, asserted in
+    // T42) does not interfere with this count assertion (50 msgs > default 16 KB).
+    const wbig = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', anchor:'M25', before:9999, after:9999, byteBudget:1024*1024 });
+    eq(wbig.messages.length <= 200, true, 'anchor-window-hard-max-clamp');
+    eq(wbig.messages.length, 50, 'anchor-window-returns-all-under-cap');
+    eq(wbig.messages[0].msgId, 'M0', 'anchor-window-from-oldest');
+    eq(wbig.messages[wbig.messages.length-1].msgId, 'M49', 'anchor-window-to-newest');
+
+    // (e) anchor not found -> empty result, no throw, no continuation.
+    const wmiss = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', anchor:'NOPE' });
+    eq(wmiss.messages.length, 0, 'anchor-not-found-empty');
+    eq(wmiss.continuation, null, 'anchor-not-found-no-continuation');
+
+    // (f) ts-bound filtering (no anchor): before=ts upper bound, after=ts lower bound.
+    //     before=1010 -> ts<=1010 ; after=1005 -> ts>=1005 ; both -> 1005..1010 inclusive (6 msgs).
+    const wb = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', before:1010, after:1005, limit:200 });
+    eq(wb.messages.every(x => x.ts <= 1010 && x.ts >= 1005), true, 'ts-bound-window-respected');
+    eq(wb.messages.length, 6, 'ts-bound-window-count');
+
+    // (g) ts-bound 'before' alone still latest-first (newest under bound first).
+    const wbOnly = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', before:1010, limit:5 });
+    eq(wbOnly.messages[0].msgId, 'M10', 'ts-before-bound-newest-first');
+    eq(wbOnly.messages.every(x => x.ts <= 1010), true, 'ts-before-bound-respected');
+
+    // (h) no-anchor latest-N contract UNCHANGED: default still 20 newest-first.
+    const plain = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us' });
+    eq(plain.messages.length, 20, 'no-anchor-default-20');
+    eq(plain.messages[0].msgId, 'M49', 'no-anchor-newest-first');
+
+    console.log(bad === 0 ? 'SLICEW OK' : 'SLICEW BAD ' + bad);
+  });
+});
+")
+echo "$T42B_OUT" | grep -qF "SLICEW OK" && ok "comms_store getSlice anchored window + ts-bound filters" || { fail "comms_store anchored slice: $T42B_OUT"; }
+rm -rf "$SLA_REPO"
+
 # ---- T43: comms_store listChats — allowlist-filtered + meta + cursor -------
 echo
 echo "T43 — comms_store listChats (allowlist filtered)"
