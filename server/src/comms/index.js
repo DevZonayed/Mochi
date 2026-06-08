@@ -16,6 +16,7 @@ import { normalizeJid, isAllowed } from "../../../plugins/continuum/lib/comms_al
 import { commsRecall } from "../../../plugins/continuum/lib/comms_recall.js";
 import { parseWhatsAppExport } from "../../../plugins/continuum/lib/comms_import.js";
 import { reconcileImport } from "../../../plugins/continuum/lib/comms_dedupe.js";
+import { setAccountStatus, setSeen, readSeen } from "../../../plugins/continuum/lib/comms_state.js";
 
 const log = (...a) => process.stderr.write(a.map(String).join(" ") + "\n");
 
@@ -46,6 +47,28 @@ const TOOL_DEFS = [
 
 function ok(obj) { return { content: [{ type: "text", text: JSON.stringify(obj) }], structuredContent: obj, isError: false }; }
 function err(msg) { return { content: [{ type: "text", text: msg }], isError: true }; }
+
+// setSeenMax: advance the per-chat last-session-seen watermark MONOTONICALLY —
+// only move it forward to a newer ts, never backward (a read of an older slice,
+// or a recall hit on an old message, must not un-see newer activity). chatId is
+// expected already-normalized by the caller. Best-effort; swallows write errors.
+function setSeenMax(projectDir, provider, accountId, chatId, ts) {
+  if (!chatId || !Number.isFinite(Number(ts))) return;
+  const key = `${provider}/${accountId}/${chatId}`;
+  let prev = 0;
+  try { prev = Number(readSeen(projectDir)[key]) || 0; } catch {}
+  const next = Number(ts);
+  if (next <= prev) return;
+  try { setSeen(projectDir, provider, accountId, chatId, next); } catch {}
+}
+
+// advanceSeen: bump a chat's watermark to the newest ts among the messages just
+// returned to the caller (a "looked at it" signal for the freshness gate).
+function advanceSeen(projectDir, provider, accountId, chatId, messages) {
+  let newest = 0;
+  for (const m of messages || []) { const t = Number(m && m.ts) || 0; if (t > newest) newest = t; }
+  if (newest > 0) setSeenMax(projectDir, provider, accountId, chatId, newest);
+}
 
 export function buildServer({ registry, env = process.env } = {}) {
   const reg = registry || (() => { const r = new ProviderRegistry(); r.register("whatsapp", (deps) => new WhatsAppProvider(deps)); return r; })();
@@ -80,11 +103,19 @@ export function buildServer({ registry, env = process.env } = {}) {
       switch (name) {
         case "comms_account_status": {
           const p = providerFor(args.provider, projectDir);
-          return ok({ status: p.status(args.accountId) });
+          const status = p.status(args.accountId);
+          // Belt-and-suspenders: mirror the live status into state.json so the
+          // fs-only init-gate (session_start.js) sees the real value even if the
+          // provider's own transition writer was bypassed for this account.
+          try { setAccountStatus(projectDir, args.provider, args.accountId, status); } catch {}
+          return ok({ status });
         }
         case "comms_link_account": {
           const p = providerFor(args.provider, projectDir);
           const res = await p.link(args.accountId, { phone: args.phone });
+          // After a link attempt the provider already persisted the pending/open
+          // status; re-mirror the current value as a belt-and-suspenders write.
+          try { setAccountStatus(projectDir, args.provider, args.accountId, p.status(args.accountId)); } catch {}
           return ok(res);
         }
         case "comms_unlink_account": {
@@ -125,18 +156,31 @@ export function buildServer({ registry, env = process.env } = {}) {
           }
           const slice = getSlice(projectDir, { provider: args.provider, accountId: args.accountId, chatId,
             limit: args.limit, anchor: args.anchor, before: args.before, after: args.after, continuation: args.continuation });
+          // Advance the last-session-seen watermark for this chat to the newest ts
+          // actually read, so the session_start.js freshness gate stops re-flagging
+          // messages the agent has already looked at. Never regress the watermark.
+          advanceSeen(projectDir, args.provider, args.accountId, chatId, slice.messages);
           return ok(slice);
         }
         case "comms_sync_now": {
           const p = providerFor(args.provider, projectDir);
           await p.connect?.(args.accountId, {});
-          return ok({ status: p.status(args.accountId) });
+          const status = p.status(args.accountId);
+          try { setAccountStatus(projectDir, args.provider, args.accountId, status); } catch {}
+          return ok({ status });
         }
         case "comms_recall": {
-          return ok(commsRecall(projectDir, {
+          const recall = commsRecall(projectDir, {
             query: args.query, provider: args.provider, accountId: args.accountId,
             chatId: args.chatId, since: args.since, until: args.until, limit: args.limit,
-          }));
+          });
+          // Reviewing recall hits counts as "looking at" those chats: advance each
+          // hit chat's watermark to the newest hit ts so the freshness gate doesn't
+          // re-surface them next session. Hits carry {provider,accountId,chatId,ts}.
+          for (const h of recall.hits || []) {
+            try { setSeenMax(projectDir, h.provider, h.accountId, h.chatId, h.ts); } catch {}
+          }
+          return ok(recall);
         }
         case "comms_import_history": {
           // Parse the WhatsApp "Export chat" .txt -> normalized Msg[], reconcile

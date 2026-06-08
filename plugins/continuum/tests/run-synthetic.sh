@@ -1057,12 +1057,16 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
 
       // three chats stored: two allowlisted ('c@g.us', 'b@g.us'), one not ('x@g.us')
       // c@g.us has newestTs=1100; b@g.us has newestTs=500 (older) — exercises DESC sort.
-      // b@g.us has NO meta.json — exercises name/chatKind null fallback.
+      // b@g.us gets the meta.json that appendMessage now auto-writes (Task 6):
+      // chatKind derived structurally from the '@g.us' suffix => 'group', name
+      // null (a group's display name isn't carried on a Msg). We then OVERWRITE
+      // c@g.us's meta with an explicit name+chatKind to prove a curated meta wins.
       m.appendMessage(d, mk('c@g.us', 1000, 'hi'));
       m.appendMessage(d, mk('c@g.us', 1100, 'yo'));
       m.appendMessage(d, mk('x@g.us', 1200, 'secret'));
       m.appendMessage(d, mk('b@g.us', 500, 'older'));
-      // give c@g.us a meta.json (name + chatKind); b@g.us intentionally has none
+      // give c@g.us a meta.json (name + chatKind) overriding the auto-written one;
+      // b@g.us keeps the auto-written meta (chatKind:'group', name:null).
       fs.writeFileSync(P.commsMetaPath(d,'whatsapp','work','c@g.us'),
         JSON.stringify({ name:'Team', chatKind:'group', updatedAt:1100 }));
 
@@ -1081,11 +1085,19 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
       eq(chats[0].count, 2, 'count-from-cursor');
       eq(chats[0].newestTs, 1100, 'newestTs-from-cursor');
 
-      // b@g.us: no meta.json -> name and chatKind must be null (not undefined or missing)
-      eq(chats[1].name, null, 'no-meta-name-is-null');
-      eq(chats[1].chatKind, null, 'no-meta-chatKind-is-null');
-      eq(chats[1].count, 1, 'no-meta-count-from-cursor');
-      eq(chats[1].newestTs, 500, 'no-meta-newestTs');
+      // b@g.us: appendMessage auto-wrote meta.json -> chatKind derived as 'group'
+      // (from the '@g.us' suffix); name stays null (no group subject on a Msg).
+      eq(chats[1].name, null, 'auto-meta-group-name-is-null');
+      eq(chats[1].chatKind, 'group', 'auto-meta-chatKind-derived-group');
+      eq(chats[1].count, 1, 'auto-meta-count-from-cursor');
+      eq(chats[1].newestTs, 500, 'auto-meta-newestTs');
+
+      // corrupt/unreadable meta.json -> name/chatKind degrade to null (defensive
+      // ?? null fallback in listChats, never throws). Clobber b@g.us's meta.
+      fs.writeFileSync(P.commsMetaPath(d,'whatsapp','work','b@g.us'), 'not json');
+      const corrupt = m.listChats(d, allowed).find(c => c.chatId === 'b@g.us');
+      eq(corrupt.name, null, 'corrupt-meta-name-null');
+      eq(corrupt.chatKind, null, 'corrupt-meta-chatKind-null');
 
       // null allowedJids -> nothing leaks (strict-by-default)
       eq(m.listChats(d, null).length, 0, 'null-allowed-returns-none');
