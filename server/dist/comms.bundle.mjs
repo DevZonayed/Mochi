@@ -198754,23 +198754,8 @@ function appendMessage(projectDir, msg) {
 var DEFAULT_LIMIT = 20;
 var HARD_MAX_LIMIT = 200;
 var DEFAULT_BYTE_BUDGET = 16 * 1024;
-function getSlice(projectDir, opts) {
-  const { provider, accountId, chatId } = opts;
-  const limitApplied = Math.min(
-    HARD_MAX_LIMIT,
-    Number.isFinite(opts.limit) && opts.limit > 0 ? Math.floor(opts.limit) : DEFAULT_LIMIT
-  );
-  const byteBudget = Number.isFinite(opts.byteBudget) && opts.byteBudget > 0 ? opts.byteBudget : DEFAULT_BYTE_BUDGET;
-  let all3 = readAllMessages(projectDir, provider, accountId, chatId);
-  all3.sort((a, b) => (b.ts || 0) - (a.ts || 0) || String(b.msgId).localeCompare(String(a.msgId)));
-  if (typeof opts.continuation === "string" && opts.continuation.includes(":")) {
-    const sep = opts.continuation.indexOf(":");
-    const curTs = Number(opts.continuation.slice(0, sep));
-    const curId = opts.continuation.slice(sep + 1);
-    all3 = all3.filter(
-      (m) => (m.ts || 0) < curTs || (m.ts || 0) === curTs && String(m.msgId).localeCompare(curId) < 0
-    );
-  }
+var DEFAULT_ANCHOR_SIDE = 10;
+function _applyBudget(all3, limitApplied, byteBudget) {
   const out = [];
   let bytes = 0;
   let continuation = null;
@@ -198787,6 +198772,50 @@ function getSlice(projectDir, opts) {
     out.push(m);
     bytes += sz;
   }
+  return { out, continuation };
+}
+function getSlice(projectDir, opts) {
+  const { provider, accountId, chatId } = opts;
+  const limitApplied = Math.min(
+    HARD_MAX_LIMIT,
+    Number.isFinite(opts.limit) && opts.limit > 0 ? Math.floor(opts.limit) : DEFAULT_LIMIT
+  );
+  const byteBudget = Number.isFinite(opts.byteBudget) && opts.byteBudget > 0 ? opts.byteBudget : DEFAULT_BYTE_BUDGET;
+  let all3 = readAllMessages(projectDir, provider, accountId, chatId);
+  all3.sort((a, b) => (b.ts || 0) - (a.ts || 0) || String(b.msgId).localeCompare(String(a.msgId)));
+  if (opts.anchor != null && opts.anchor !== "") {
+    const idx = all3.findIndex((m) => String(m.msgId) === String(opts.anchor));
+    if (idx < 0) return { messages: [], limitApplied, continuation: null };
+    const beforeN = Math.min(
+      HARD_MAX_LIMIT,
+      Number.isFinite(opts.before) && opts.before >= 0 ? Math.floor(opts.before) : DEFAULT_ANCHOR_SIDE
+    );
+    const afterN = Math.min(
+      HARD_MAX_LIMIT,
+      Number.isFinite(opts.after) && opts.after >= 0 ? Math.floor(opts.after) : DEFAULT_ANCHOR_SIDE
+    );
+    const newerStart = Math.max(0, idx - afterN);
+    const olderEnd = idx + 1 + beforeN;
+    const window2 = all3.slice(newerStart, olderEnd);
+    window2.reverse();
+    const out2 = window2.slice(0, HARD_MAX_LIMIT);
+    return { messages: out2, limitApplied, continuation: null };
+  }
+  if (Number.isFinite(opts.before)) {
+    all3 = all3.filter((m) => (m.ts || 0) <= opts.before);
+  }
+  if (Number.isFinite(opts.after)) {
+    all3 = all3.filter((m) => (m.ts || 0) >= opts.after);
+  }
+  if (typeof opts.continuation === "string" && opts.continuation.includes(":")) {
+    const sep = opts.continuation.indexOf(":");
+    const curTs = Number(opts.continuation.slice(0, sep));
+    const curId = opts.continuation.slice(sep + 1);
+    all3 = all3.filter(
+      (m) => (m.ts || 0) < curTs || (m.ts || 0) === curTs && String(m.msgId).localeCompare(curId) < 0
+    );
+  }
+  const { out, continuation } = _applyBudget(all3, limitApplied, byteBudget);
   return { messages: out, limitApplied, continuation };
 }
 function readMetaSafe(file) {

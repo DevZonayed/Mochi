@@ -196,14 +196,18 @@ function _applyBudget(all, limitApplied, byteBudget) {
 }
 
 // getSlice: latest-N or windowed read of a chat. Order is reconstructed at READ
-// time by ts. Three modes (caps are server-side invariants in ALL of them —
-// limit clamps to 200, byte budget truncates with a `continuation` cursor):
+// time by ts. Three modes (caps are server-side invariants — limit clamps to 200,
+// and the byte budget truncates with a `continuation` cursor in the PAGING modes
+// 2 & 3; Mode 1 is count-bounded only, see below):
 //
 //   1. ANCHORED (opts.anchor = a msgId): the recall-expand path (§4.3, C5). After
 //      the ts-DESC sort, locate the anchor and return up to `before` (default 10)
 //      OLDER + the anchor + up to `after` (default 10) NEWER messages, emitted in
 //      ts ASC order (oldest→newest, a readable timeline). Per-side counts and the
-//      total are clamped to HARD_MAX. Anchor not found → empty result (no throw).
+//      total are clamped to HARD_MAX (<=200), so the window is already small and
+//      bounded; the byte-budget gate is INTENTIONALLY skipped in this mode so the
+//      anchor + its requested context are never dropped (the whole point of the
+//      recall-expand use case). Anchor not found → empty result (no throw).
 //   2. TS-BOUND (no anchor, but `before`/`after` given as epoch-second bounds):
 //      filter to `ts <= before` and/or `ts >= after`, then latest-N within bounds.
 //   3. LATEST-N (default): newest-first, limit defaults to 20.
@@ -243,8 +247,16 @@ export function getSlice(projectDir, opts) {
     const window = all.slice(newerStart, olderEnd);    // still newest-first
     window.reverse();                                  // → ts ASC (oldest → newest) timeline
 
-    // Apply HARD_MAX + byte budget across the assembled window.
-    const { out } = _applyBudget(window, HARD_MAX_LIMIT, byteBudget);
+    // The anchored window is already COUNT-bounded: each side is clamped to
+    // HARD_MAX above, and the total is clamped to HARD_MAX here. We deliberately
+    // do NOT apply the byte-budget gate in this mode. _applyBudget truncates from
+    // the END of the (now ts-ASC) array, i.e. the NEWEST side — which would drop
+    // the anchor and the newer half of its context, the exact thing recall-expand
+    // (comms-recall.md:12 → comms_get_messages({anchor})) asks for. The window is
+    // bounded to <=200 records by design and does not page, so the byte budget is
+    // unnecessary here; honoring it would silently defeat the feature. Anchor is
+    // therefore always present in the returned window regardless of byteBudget.
+    const out = window.slice(0, HARD_MAX_LIMIT);
     return { messages: out, limitApplied, continuation: null };
   }
 

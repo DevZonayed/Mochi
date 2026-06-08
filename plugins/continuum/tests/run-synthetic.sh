@@ -1003,6 +1003,16 @@ import('$PLUGIN_DIR/lib/comms_store.js').then((m) => {
     eq(wbig.messages[0].msgId, 'M0', 'anchor-window-from-oldest');
     eq(wbig.messages[wbig.messages.length-1].msgId, 'M49', 'anchor-window-to-newest');
 
+    // (d2) byte-budget under pressure MUST NOT drop the anchor (recall-expand contract).
+    //      The anchored window is count-bounded (<=200), so a tiny byteBudget does NOT
+    //      truncate it from the newest side (the prior bug returned only ['M15'], dropping
+    //      M25 entirely). Assert the anchor is ALWAYS present and the full window survives.
+    const wtiny = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', anchor:'M25', before:10, after:10, byteBudget:300 });
+    eq(wtiny.messages.some(x => x.msgId === 'M25'), true, 'anchor-present-under-tiny-bytebudget');
+    eq(wtiny.messages.map(x=>x.msgId).join(','), 'M15,M16,M17,M18,M19,M20,M21,M22,M23,M24,M25,M26,M27,M28,M29,M30,M31,M32,M33,M34,M35', 'anchor-window-intact-under-tiny-bytebudget');
+    eq(wtiny.messages[0].msgId, 'M15', 'anchor-window-tiny-budget-oldest-M15');
+    eq(wtiny.messages[wtiny.messages.length-1].msgId, 'M35', 'anchor-window-tiny-budget-newest-M35');
+
     // (e) anchor not found -> empty result, no throw, no continuation.
     const wmiss = m.getSlice(d, { provider:'whatsapp', accountId:'work', chatId:'c@g.us', anchor:'NOPE' });
     eq(wmiss.messages.length, 0, 'anchor-not-found-empty');
