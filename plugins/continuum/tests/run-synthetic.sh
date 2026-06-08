@@ -1650,6 +1650,36 @@ APOS60=$(echo "$F60_CTX" | grep -n "hasn't decided about communication-channel s
 [ -n "$BPOS60" ] && [ -n "$APOS60" ] && [ "$BPOS60" -lt "$APOS60" ] && ok "bootstrap precedes comms ASK (ordering contract)" || fail "ordering wrong: bootstrap=$BPOS60 ask=$APOS60"
 rm -rf "$F60REPO"
 
+# ---- T61: commsChatDir rejects traversal chatIds (security path-harden) ------
+# Defense-in-depth (Task 5): a chatId containing '/', a backslash, or '..' must
+# be rejected so a malicious/garbage chatId can never escape the store root via
+# path.join. Legitimate JIDs (e.g. 'c@g.us', '12345@s.whatsapp.net') are unaffected.
+echo
+echo "T61 — commsChatDir rejects traversal chatIds, allows normal JIDs"
+T61_OUT=$(node -e "
+import('$PLUGIN_DIR/lib/paths.js').then((m) => {
+  const d = '/tmp/proj';
+  const bad = ['../escape', '..', 'a/b', 'a\\\\b', '../../etc/passwd', 'x/../../y'];
+  let fails = 0;
+  for (const c of bad) {
+    let threw = false;
+    try { m.commsChatDir(d,'whatsapp','work', c); } catch { threw = true; }
+    if (!threw) { console.log('NOT REJECTED:', JSON.stringify(c)); fails++; }
+  }
+  // Legitimate JIDs must still resolve correctly under the store root.
+  const good = ['c@g.us', '12345@s.whatsapp.net'];
+  for (const c of good) {
+    try {
+      const got = m.commsChatDir(d,'whatsapp','work', c);
+      const want = '/tmp/proj/.continuum/comms/store/whatsapp/work/' + c;
+      if (got !== want) { console.log('GOOD MISRESOLVED:', got, 'want', want); fails++; }
+    } catch (e) { console.log('GOOD THREW:', c, e.message); fails++; }
+  }
+  console.log(fails === 0 ? 'HARDEN OK' : 'HARDEN BAD ' + fails);
+});
+")
+echo "$T61_OUT" | grep -qF "HARDEN OK" && ok "commsChatDir rejects traversal, allows normal JIDs" || { fail "commsChatDir harden: $T61_OUT"; }
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"

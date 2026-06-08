@@ -113,7 +113,17 @@ export function buildServer({ registry, env = process.env } = {}) {
           return ok({ allowed_jids: acc.allowed_jids });
         }
         case "comms_get_messages": {
-          const slice = getSlice(projectDir, { provider: args.provider, accountId: args.accountId, chatId: args.chatId,
+          // §6.4 READ-SIDE allowlist gate (security): list/get/recall only ever
+          // return allowlisted chats. Without this, comms_get_messages would read
+          // any chat by chatId — a read-side bypass of the channel-strict guarantee.
+          // Mirror the comms_recall / comms_import_history guard exactly: normalize
+          // the chatId, then strict-membership check before touching the store.
+          const chatId = normalizeJid(args.chatId);
+          const cfg = readConfig(projectDir);
+          if (!isAllowed(cfg, args.provider, args.accountId, chatId)) {
+            return err(`comms_get_messages: ${args.provider}/${args.accountId} chat not on allowlist: ${chatId || "(empty jid)"}`);
+          }
+          const slice = getSlice(projectDir, { provider: args.provider, accountId: args.accountId, chatId,
             limit: args.limit, anchor: args.anchor, before: args.before, after: args.after, continuation: args.continuation });
           return ok(slice);
         }
