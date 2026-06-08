@@ -196,4 +196,19 @@ function mockSocket() {
   await fs.rm(dir, { recursive: true, force: true });
 }
 
+// 9) unlink() persists status "logged_out" into state.json so the fs-only init-gate
+//    does not still report the account as connected after an explicit unlink.
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "comms-state-unlink-"));
+  await writeConfig(dir, { version: 1, decided: true, declined: false,
+    providers: { whatsapp: { accounts: { [ACCOUNT]: { capture: "session", mode: "strict", allowed_jids: [] } } } } });
+  const sock = mockSocket();
+  const p = new WhatsAppProvider({ projectDirFor: () => dir, reconnectBaseMs: 0 });
+  await p.connect(ACCOUNT, { makeSocket: () => sock });
+  assert.equal(readState(dir).whatsapp?.[ACCOUNT]?.status, "connected", "precondition: connect persisted connected");
+  await p.unlink(ACCOUNT);
+  assert.equal(readState(dir).whatsapp?.[ACCOUNT]?.status, "logged_out", "unlink must persist status logged_out into state.json");
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
 console.log("✓ comms state writers (setAccountStatus/setSeen) + chat meta.json");
