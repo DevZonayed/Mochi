@@ -308,14 +308,21 @@ const TOOLS = [
     assert.ok(r.isError === true, "non-allowlisted import returns an error result");
   }
 
-  // Readback of the denied chat through getSlice must be EMPTY — proves nothing
-  // was persisted to the store under the non-allowlisted chatId.
+  // Readback of the denied chat through getSlice must surface NOTHING. The
+  // read-side allowlist gate (Task 5) refuses a non-allowlisted chat outright
+  // (isError); on the off chance a record physically exists it is still never
+  // exposed. Either outcome (error, or non-error empty slice) proves nothing
+  // leaked under the non-allowlisted chatId.
   const rs = await srv.handleToolCall({
     name: "comms_get_messages",
     arguments: { provider, accountId, chatId: deniedChat, limit: 50, project_dir: dir },
   });
-  const slice = JSON.parse(rs.content[0].text);
-  assert.equal(slice.messages.length, 0, "denied chat must hold zero stored messages");
+  if (rs.isError) {
+    assert.ok(/allowlist/i.test(rs.content[0].text), "denied read refused by the allowlist gate");
+  } else {
+    const slice = JSON.parse(rs.content[0].text);
+    assert.equal(slice.messages.length, 0, "denied chat must hold zero stored messages");
+  }
 
   // Sanity: the ALLOWLISTED chat still imports normally (guard isn't over-broad).
   const rOk = await srv.handleToolCall({
@@ -325,6 +332,61 @@ const TOOLS = [
   assert.equal(rOk.isError, false, `allowlisted import returned error: ${rOk.content[0].text}`);
   const outOk = JSON.parse(rOk.content[0].text);
   assert.ok(outOk.added > 0, "allowlisted import still adds records");
+
+  await fs.rm(dir, { recursive: true, force: true });
+}
+
+// 9) comms_get_messages READ-SIDE ALLOWLIST GATE (§6.4 security, Task 5).
+//    A read against a chat that is NOT on the account's allowlist must be
+//    REFUSED (isError) — `getSlice` must never expose a non-allowlisted chat
+//    even if some record somehow landed in its store dir. The allowlisted chat
+//    still reads normally (the gate isn't over-broad).
+{
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "comms-srv-getmsg-deny-"));
+  const provider = "whatsapp";
+  const accountId = "work";
+  const allowedChat = "12345@s.whatsapp.net";
+  const deniedChat = "99999@s.whatsapp.net"; // deliberately NOT in allowed_jids
+
+  await writeConfig(dir, {
+    version: 1, decided: true, declined: false,
+    providers: { [provider]: { accounts: { [accountId]: {
+      capture: "session", mode: "strict", allowed_jids: [allowedChat],
+    } } } },
+  });
+
+  // Seed a message into BOTH chats' store dirs directly (bypassing the capture
+  // allowlist guard) to prove the read-side gate refuses the denied chat even
+  // when records physically exist on disk under it.
+  const base = 1_700_000_000;
+  for (const chatId of [allowedChat, deniedChat]) {
+    appendMessage(dir, {
+      provider, accountId, chatId,
+      msgId: "m1", fromMe: false, senderId: "u1", senderName: "Alice",
+      ts: base, tsIso: new Date(base * 1000).toISOString(),
+      kind: "text", text: "hello", media: null, reply_to: null, source: "live",
+    });
+  }
+
+  const reg = new ProviderRegistry();
+  const srv = buildServer({ registry: reg, env: {} });
+
+  // Read of the NON-allowlisted chat must be refused with an error result.
+  const rDeny = await srv.handleToolCall({
+    name: "comms_get_messages",
+    arguments: { provider, accountId, chatId: deniedChat, limit: 50, project_dir: dir },
+  });
+  assert.equal(rDeny.isError, true, "non-allowlisted comms_get_messages must return an error");
+  assert.ok(/allowlist/i.test(rDeny.content[0].text), "error names the allowlist refusal");
+
+  // Read of the ALLOWLISTED chat still returns its messages (gate not over-broad).
+  const rOk = await srv.handleToolCall({
+    name: "comms_get_messages",
+    arguments: { provider, accountId, chatId: allowedChat, limit: 50, project_dir: dir },
+  });
+  assert.equal(rOk.isError, false, `allowlisted comms_get_messages returned error: ${rOk.content[0].text}`);
+  const slice = JSON.parse(rOk.content[0].text);
+  assert.equal(slice.messages.length, 1, "allowlisted chat still reads its stored message");
 
   await fs.rm(dir, { recursive: true, force: true });
 }
