@@ -60,6 +60,39 @@ function readAllMessages(projectDir, provider, accountId, chatId) {
 // exported so later tasks (append/getSlice) and tests can share it.
 export { readAllMessages, atomicWrite, commsChatDir };
 
+// updateChatMeta: create/refresh the per-chat meta.json so listChats() returns
+// real name/chatKind instead of null/null. Called on every append (cheap — one
+// small JSON read+write per chat). chatKind is derived structurally from the
+// JID suffix ("@g.us" => group, else dm). name is best-effort: WhatsApp does not
+// carry the chat's display name on a normalized Msg, but for a 1:1 DM the
+// inbound counterpart's pushName (msg.senderName, only when !fromMe) is a good
+// label. An existing non-empty name is never clobbered with a blank, and a name
+// is never taken from our OWN outbound (fromMe) messages.
+function updateChatMeta(projectDir, msg) {
+  const { provider, accountId, chatId } = msg;
+  const file = commsMetaPath(projectDir, provider, accountId, chatId);
+  const prev = (() => {
+    if (!fs.existsSync(file)) return {};
+    try { const v = JSON.parse(fs.readFileSync(file, "utf8")); return (v && typeof v === "object" && !Array.isArray(v)) ? v : {}; }
+    catch { return {}; }
+  })();
+
+  const chatKind = String(chatId).endsWith("@g.us") ? "group" : "dm";
+  let name = prev.name ?? null;
+  // Only backfill a DM name from an INBOUND message's senderName (our own
+  // outbound pushName is not the counterpart's name). Groups keep whatever name
+  // they have (the group subject is only known via listGroups, not a Msg).
+  if (chatKind === "dm" && !msg.fromMe && !name) {
+    const sn = (msg.senderName || "").trim();
+    if (sn) name = sn;
+  }
+
+  const next = { ...prev, chatKind, name };
+  // Skip the write if nothing changed (avoid churn on every append).
+  if (prev.chatKind === next.chatKind && (prev.name ?? null) === (next.name ?? null) && fs.existsSync(file)) return;
+  atomicWrite(file, JSON.stringify(next, null, 2) + "\n");
+}
+
 // appendMessage: append-only insert with TWO-TIER dedupe (spec §4.2) and cursor
 // maintenance. Idempotent on (provider,accountId,chatId,msgId) [tier 1] and on
 // fingerprint [tier 2]; on a tier-2 fingerprint collision, a live/backfill
@@ -118,6 +151,7 @@ export function appendMessage(projectDir, msg) {
       oldestId: oldest2.msgId, oldestTs: oldest2.ts || 0,
       count: allReplaced.length,
     });
+    updateChatMeta(projectDir, record);
     return { appended: true };
   }
 
@@ -163,6 +197,7 @@ export function appendMessage(projectDir, msg) {
     oldestId: oldest.msgId, oldestTs: oldest.ts || 0,
     count: all.length,
   });
+  updateChatMeta(projectDir, record);
 
   return { appended: true };
 }

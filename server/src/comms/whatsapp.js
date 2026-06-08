@@ -81,6 +81,7 @@ import { appendMessage, listChats as storeListChats, getSlice } from "../../../p
 import { fingerprint } from "../../../plugins/continuum/lib/comms_dedupe.js";
 import { isAllowed, normalizeJid } from "../../../plugins/continuum/lib/comms_allowlist.js";
 import { readConfig } from "../../../plugins/continuum/lib/comms_config.js";
+import { setAccountStatus } from "../../../plugins/continuum/lib/comms_state.js";
 import { commsAuthDir } from "../../../plugins/continuum/lib/paths.js";
 
 // LID normalization (§5.2): map @lid <-> phone-JID. baileys' jidNormalizedUser
@@ -118,6 +119,19 @@ export class WhatsAppProvider extends CommsProvider {
 
   status(accountId) { return this.statuses.get(accountId) || "logged_out"; }
 
+  // _persistStatus: mirror an in-memory status transition into state.json so the
+  // fs-only init-gate (session_start.js statusOf()) reflects the REAL account
+  // status instead of defaulting every account to "needs_login" forever. Uses the
+  // account's bound projectDir (§3.1 — never cwd). Best-effort: a write failure
+  // must never break the live socket / connection lifecycle, so it is swallowed.
+  _persistStatus(accountId, status) {
+    this.statuses.set(accountId, status);
+    let projectDir;
+    try { projectDir = this.projectDirFor(accountId); } catch { projectDir = null; }
+    if (!projectDir) return;
+    try { setAccountStatus(projectDir, "whatsapp", accountId, status); } catch (e) { this.logger.warn("setAccountStatus failed", String(e)); }
+  }
+
   onMessage(cb) { this.listeners.push(cb); }
 
   // connect: opens a socket and wires capture. `makeSocket` is injectable so
@@ -130,7 +144,7 @@ export class WhatsAppProvider extends CommsProvider {
     const factory = makeSocket || ((deps) => this._realMakeSocket(accountId, authDir, deps));
     const sock = await factory({ authDir, accountId });
     this.sockets.set(accountId, sock);
-    this.statuses.set(accountId, "connected");
+    this._persistStatus(accountId, "connected");
     this._wireCapture(accountId, sock, projectDir);
     this._wireHistory(accountId, sock, projectDir);
     this._wireConnection(accountId, sock, projectDir, factory);
@@ -203,7 +217,7 @@ export class WhatsAppProvider extends CommsProvider {
       if (update.connection === "open") {
         // Successful open — reset per-account backoff counter.
         this._reconnects.set(accountId, 0);
-        this.statuses.set(accountId, "connected");
+        this._persistStatus(accountId, "connected");
         return;
       }
       if (update.connection === "close") {
@@ -217,18 +231,18 @@ export class WhatsAppProvider extends CommsProvider {
         const code = this._statusCode(update);
         if (code === 401) {
           // loggedOut: wipe auth, surface re-login, DO NOT reconnect.
-          this.statuses.set(accountId, "logged_out");
+          this._persistStatus(accountId, "logged_out");
           try { await this._wipeAuth(accountId); } catch {}
           return;
         }
         if (WhatsAppProvider._NO_RECONNECT_CODES.has(code)) {
           // Permanent failure — surface as logged_out so callers re-link.
-          this.statuses.set(accountId, "logged_out");
+          this._persistStatus(accountId, "logged_out");
           return;
         }
         // restartRequired(515) / connectionClosed(428) / connectionLost(408) /
         // others: attempt bounded reconnect with exponential backoff.
-        this.statuses.set(accountId, "needs_login");
+        this._persistStatus(accountId, "needs_login");
         const attempts = (this._reconnects.get(accountId) || 0) + 1;
         this._reconnects.set(accountId, attempts);
         if (attempts > WhatsAppProvider._MAX_RECONNECTS) {
@@ -332,6 +346,13 @@ export class WhatsAppProvider extends CommsProvider {
     const authDir = this.getSessionDir(accountId);
     try { await releaseLock(authDir); } catch {}
     await this._wipeAuth(accountId);
+    // Persist logged_out to state.json (lives under comms/, NOT the just-wiped
+    // auth dir) so the fs-only init-gate does not still report the account as
+    // connected after an explicit unlink.
+    try {
+      const projectDir = this.projectDirFor(accountId);
+      if (projectDir) setAccountStatus(projectDir, "whatsapp", accountId, "logged_out");
+    } catch {}
   }
 
   // link: open a socket (if needed) and resolve to QR or pairing code.
@@ -344,6 +365,13 @@ export class WhatsAppProvider extends CommsProvider {
     // NOTE: do NOT call _wireConnection here; connect() already wired it with
     // the correct factory. Calling it again would double-wire the handler,
     // causing two reconnects on every close event (socket leak / doubling storm).
+
+    // While a QR / pairing code is pending, the account is NOT yet authenticated
+    // (connect() optimistically set "connected"; that only becomes real once the
+    // user scans/pairs and connection.update emits 'open', which flips it back to
+    // "connected"). Surface "needs_login" so the init-gate prompts the user to
+    // finish linking instead of reporting a half-open socket as connected.
+    this._persistStatus(accountId, "needs_login");
 
     // Pairing path: request ONCE, never loop (429 guard).
     if (opts.phone) {
