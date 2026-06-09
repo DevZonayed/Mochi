@@ -28,6 +28,10 @@
   // Sessions live in `mochiComments` (content-owned). `mochiCommentSession`
   // (background-owned, key SKEY) carries only the comment-mode on/off flag.
   const DKEY = "mochiComments";
+  // Deterministic id-based merge (comment-merge.js, injected just before us).
+  // Lets us union the background bridge's writes with our own instead of
+  // last-write-wins clobbering them.
+  const Merge = (typeof globalThis !== "undefined" && globalThis.MochiCommentMerge) || null;
   let store = { v: 2, taughtScroll: false, activeByOrigin: {}, pending: null, sessions: {} };
   let modeActive = true;   // comment mode on/off (mirrors mochiCommentSession.active)
 
@@ -473,10 +477,22 @@
     sessmenu.classList.remove("open");
     updateCounts(); renderPins(); if (devState.open) renderDevPins(); if (panelEl) renderPanel();
   });
+  // Outside-the-overlay clicks: the closed shadow retargets in-shadow clicks to
+  // `host`, so this only fires (closes) for genuine page clicks.
   function onDocClickCloseSessMenu(e) {
     if (sessmenu.classList.contains("open") && !(e.target === host || host.contains(e.target))) sessmenu.classList.remove("open");
   }
   document.addEventListener("click", onDocClickCloseSessMenu, true);
+  // Inside-the-shadow clicks: a document listener can't see these (retargeting),
+  // so listen on the shadow root, where e.target is the real internal node.
+  // Close the menu on any in-shadow click that isn't the pill or the menu itself
+  // (clicking the FAB/dock used to leave the dropdown lingering).
+  function onShadowClickCloseSessMenu(e) {
+    if (!sessmenu.classList.contains("open")) return;
+    if (sesspill.contains(e.target) || sessmenu.contains(e.target)) return;
+    sessmenu.classList.remove("open");
+  }
+  root.addEventListener("click", onShadowClickCloseSessMenu, true);
 
   let dockTimer = null;
   function openDock() {
@@ -627,7 +643,7 @@
     function doSave() {
       const text = ta.value.trim();
       if (!text) { ta.focus(); return; }
-      if (existing) { existing.text = text; const es = findCommentSession(existing.id); if (es) es.updatedAt = Date.now(); }
+      if (existing) { existing.text = text; existing.updatedAt = Date.now(); const es = findCommentSession(existing.id); if (es) es.updatedAt = Date.now(); }
       else {
         const s = activeSession();
         s.comments.push({
@@ -638,7 +654,7 @@
           box: { x: Math.round(r.left + sx), y: Math.round(r.top + sy), w: Math.round(r.width), h: Math.round(r.height) },
           viewport: { w: target.win.innerWidth, h: target.win.innerHeight, dpr: target.win.devicePixelRatio || 1 },
           breakpoint: target.breakpoint || null,
-          createdAt: Date.now(),
+          createdAt: Date.now(), updatedAt: Date.now(),
         });
         s.updatedAt = Date.now();
       }
@@ -674,7 +690,11 @@
   const pinEls = new Map(); // id -> el
   function renderPins() {
     const route = routeOf();
-    const want = commentsForRoute(route).filter((c) => !c.breakpoint);
+    // Breakpoint-scoped comments live in the device frame WHILE it's open; when
+    // it's closed, still surface them as normal page pins so an agent's
+    // breakpoint comments are never invisible (they'd otherwise only show at an
+    // exact device-frame width match).
+    const want = commentsForRoute(route).filter((c) => devState.open ? !c.breakpoint : true);
     const wantIds = new Set(want.map((c) => c.id));
     for (const [id, el] of [...pinEls]) if (!wantIds.has(id)) { try { el.remove(); } catch {} pinEls.delete(id); }
     for (const c of want) {
@@ -690,9 +710,9 @@
         });
         layer.appendChild(el); pinEls.set(c.id, el);
       }
-      el.className = "pin" + (c.severity ? " sev-" + c.severity : "") + (c.resolved ? " done" : "");
+      el.className = "pin" + (c.severity ? " sev-" + c.severity : "") + (c.resolved ? " done" : "") + (c.breakpoint ? " bp" : "");
       el.textContent = c.resolved ? "✓" : c.n;
-      el.title = (c.severity ? "[" + c.severity + "] " : "") + c.text;
+      el.title = (c.severity ? "[" + c.severity + "] " : "") + (c.breakpoint && c.breakpoint.label ? "@" + c.breakpoint.label + " " : "") + c.text;
     }
     positionPins();
   }
@@ -910,7 +930,7 @@
         const row = document.createElement("div"); row.className = "row" + (c.resolved ? " resolved" : "");
         row.innerHTML = `<span class="n${c.severity ? " sev-" + c.severity : ""}">${c.resolved ? "✓" : c.n}</span>
           <div class="c"><div class="tx">${escapeHtml(c.text)}</div>
-            <div class="meta">${c.severity ? `<span class="sev sev-${c.severity}">${c.severity}</span>` : ""}<span>${escapeHtml(c.tagName)}</span>${c.breakpoint ? `<span class="bp">${escapeHtml(c.breakpoint.label)}</span>` : ""}<span>${escapeHtml((c.elementText || "").slice(0, 40))}</span></div></div>
+            <div class="meta">${c.severity ? `<span class="sev sev-${c.severity}">${c.severity}</span>` : ""}<span>${escapeHtml(c.tagName)}</span>${c.breakpoint && c.breakpoint.label ? `<span class="bp">${escapeHtml(c.breakpoint.label)}</span>` : ""}<span>${escapeHtml((c.elementText || "").slice(0, 40))}</span></div></div>
           <button class="del" data-del title="Delete">✕</button>`;
         row.addEventListener("click", (e) => {
           if (e.target.closest("[data-del]")) { deleteComment(c.id); renderPanel(); return; }
@@ -1098,7 +1118,10 @@
     const fr = devState.overlay.getBoundingClientRect();
     const s = devState.scale || 1;
     const dv = currentDevice();
-    const want = currentComments().filter((c) => c.route === routeOf() && c.breakpoint && c.breakpoint.width === dv.width);
+    // Tolerance, not exact equality: the agent's emulate widths (e.g. 393, 412,
+    // 820) rarely match the human's chosen frame width exactly, so a ±60px band
+    // keeps near-width breakpoint pins visible in the frame.
+    const want = currentComments().filter((c) => c.route === routeOf() && c.breakpoint && Math.abs((c.breakpoint.width || 0) - dv.width) <= 60);
     const existing = new Map([...devState.overlay.children].map((el) => [el.dataset.id, el]));
     for (const c of want) {
       let node = null; try { node = doc.querySelector(c.selector); } catch {}
@@ -1150,7 +1173,7 @@
     lines.push(`Generated ${new Date().toISOString()}. Each item has a CSS selector + route so you can locate the exact element. Fix each comment.`);
     lines.push("");
     for (const c of cs) {
-      const bp = c.breakpoint ? ` · [${c.breakpoint.label} ${c.breakpoint.width}px]` : "";
+      const bp = (c.breakpoint && c.breakpoint.label) ? ` · [${c.breakpoint.label} ${c.breakpoint.width}px]` : "";
       lines.push(`## ${c.n} · ${c.route}${bp}`);
       lines.push(`- selector: \`${c.selector}\``);
       lines.push(`- element: <${c.tagName}>${c.elementText ? ` "${c.elementText}"` : ""}${c.role ? ` (role=${c.role})` : ""}`);
@@ -1222,11 +1245,22 @@
     const nv = changes[DKEY].newValue;
     if (!nv) return;
     if (JSON.stringify(nv) === lastWriteJson) return;   // our own write — ignore
-    // We have unsaved local edits pending — persist ours instead of discarding
-    // them; the other tab will then sync to our version. (Avoids the 120ms
-    // last-write-wins data-loss race.)
-    if (saveTimer) { flushStore(); return; }
-    applyStore(nv);
+    // UNION the incoming write into our in-memory store instead of discarding or
+    // wholesale-replacing it. The background bridge and the human's content
+    // script are independent writers of `mochiComments`; whole-document
+    // last-write-wins silently dropped one side's comments. If our local store
+    // held anything the incoming write lacks (e.g. a comment we added/edited
+    // that the bridge's snapshot predated, or one the bridge clobbered), push
+    // the union back so it isn't lost. Deterministic canonStore() comparison
+    // means a converged union re-saves nothing (no cross-tab ping-pong).
+    if (Merge) {
+      const merged = Merge.mergeStores(store, nv);
+      store = merged;
+      if (Merge.canonStore(merged) !== Merge.canonStore(nv)) saveStore();
+    } else {
+      if (saveTimer) { flushStore(); return; }
+      applyStore(nv);
+    }
     updateCounts(); renderPins(); if (devState.open) renderDevPins(); if (panelEl) renderPanel();
   }
 
@@ -1241,6 +1275,7 @@
     window.removeEventListener("scroll", scheduleReposition, true);
     window.removeEventListener("resize", scheduleReposition, true);
     try { document.removeEventListener("click", onDocClickCloseSessMenu, true); } catch {}
+    try { root.removeEventListener("click", onShadowClickCloseSessMenu, true); } catch {}
     try { chrome.runtime.onMessage.removeListener(onRuntimeMessage); } catch {}
     try { chrome.storage.onChanged.removeListener(onStorageChanged); } catch {}
     unpatchHistory();

@@ -48,7 +48,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["mochi-modal.js", "comment-mode.js"],
+      "resources": ["mochi-modal.js", "comment-merge.js", "comment-mode.js"],
       "matches": ["<all_urls>"]
     }
   ]
