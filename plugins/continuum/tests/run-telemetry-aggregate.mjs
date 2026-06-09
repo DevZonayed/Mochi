@@ -70,6 +70,20 @@ try {
   ok("sequences = per-session adjacent tool transitions");
 } catch (e) { bad("sequences", e); }
 
+// A5b: sequences — ts-ordering: events inserted in reverse-ts order must still
+// produce the transition in ascending-ts order (first→second, not second→first).
+try {
+  const out = aggregate([
+    E({ sid: "s1", ts: 2, tool: "second" }),
+    E({ sid: "s1", ts: 1, tool: "first" }),
+  ]);
+  const seq = out.sequences;
+  assert.equal(seq.length, 1, "exactly one transition");
+  assert.equal(seq[0].from, "first",  "from = lower-ts tool");
+  assert.equal(seq[0].to,   "second", "to   = higher-ts tool");
+  ok("sequences ts-ordering: out-of-order input sorted by ts before pairing");
+} catch (e) { bad("sequences ts-ordering", e); }
+
 // A6: sequences sorted descending by count.
 try {
   const out = aggregate([
