@@ -1,19 +1,18 @@
 // plugins/continuum/tests/run-telemetry-all.mjs
 // Runs every telemetry unit runner in one shot (CI entry point).
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const runners = [
-  "run-telemetry-paths.mjs",
-  "run-telemetry-install-id.mjs",
-  "run-telemetry-config.mjs",
-  "run-telemetry-redact.mjs",
-  "run-telemetry-log.mjs",
-  "run-telemetry-emit.mjs",
-  "run-telemetry-aggregate.mjs",
-];
+// Discover every telemetry unit runner that EXISTS (excluding this aggregator),
+// so phases that add runners (emit/aggregate) are picked up automatically and
+// the suite never fails on a not-yet-created forward reference.
+const runners = fs
+  .readdirSync(here)
+  .filter((f) => /^run-telemetry-.+\.mjs$/.test(f) && f !== "run-telemetry-all.mjs")
+  .sort();
 let failed = 0;
 for (const r of runners) {
   const res = spawnSync(process.execPath, [path.join(here, r)], { stdio: "inherit" });
