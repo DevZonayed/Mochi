@@ -1726,6 +1726,8 @@ gate_ctx "$GT" resume | grep -qF "[continuum:telemetry] This repo hasn't decided
 gate_ctx "$GT" compact | grep -qF "[continuum:telemetry] This repo hasn't decided" && fail "telemetry ASK wrongly emitted on compact (anti-nag suppression broken)" || ok "telemetry gate silent on compact when undecided"
 rm -rf "$GT"
 
+echo; echo "=== telemetry hooks/commands ==="; bash "$PLUGIN_DIR/tests/run-telemetry.sh" || FAIL=$((FAIL+1))
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"
