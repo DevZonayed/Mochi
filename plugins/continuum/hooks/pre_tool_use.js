@@ -14,6 +14,10 @@ import path from "node:path";
 import { paths } from "../lib/paths.js";
 import { drainInbox } from "../lib/broker.js";
 import { formatHints } from "../lib/hint_formatter.js";
+import { appendEvent } from "../lib/telemetry_log.js";
+import { redactEvent } from "../lib/telemetry_redact.js";
+import { readConfig as readTelemetryConfig } from "../lib/telemetry_config.js";
+import { getInstallId } from "../lib/install_id.js";
 
 async function readStdin() {
   return new Promise((resolve) => {
@@ -42,6 +46,30 @@ async function main() {
 
   const projectDir = payload.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   let sessionId = payload.session_id || null;
+
+  // [telemetry Arm-1] Record this tool call FIRST, unconditionally, BEFORE the
+  // sentinel fast-skip below (§13.7). Hot-path safe: one synchronous JSONL line,
+  // NO network/LLM. killSwitch "off" disables capture too (§7). Never throws.
+  try {
+    const tcfg = readTelemetryConfig(projectDir);
+    if (tcfg.killSwitch !== "off") {
+      const rawTool = String(payload.tool_name || payload.toolName || "");
+      let tool = rawTool, mcp = "";
+      const mm = rawTool.match(/^mcp__plugin_([a-z0-9_]+?)__(.+)$/i);
+      if (mm) { mcp = mm[1]; tool = mm[2]; }
+      appendEvent(projectDir, redactEvent({
+        ts: Math.floor(Date.now() / 1000),
+        sid: sessionId || "",
+        iid: getInstallId(),
+        tool, mcp,
+        ok: true,            // PreToolUse precedes the result; ok/err set by PostToolUse
+        err: "",
+        dur_b: "",
+        v: process.env.MOCHI_PLUGIN_VERSION || "0.7.0",
+        os: process.platform,
+      }));
+    }
+  } catch {}
 
   // Fast-skip: if no sentinel, no message — exit ~immediately.
   const sentinel = path.join(projectDir, ".continuum", ".inbox-flag");
