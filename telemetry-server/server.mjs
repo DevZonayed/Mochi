@@ -77,7 +77,7 @@ export function createServer(env = process.env) {
       // owner-only routes
       if (pathname === "/dashboard" || pathname === "/v1/summary" || pathname === "/v1/data") {
         if (!checkOwner(req.headers, env)) {
-          return send(res, 401, "unauthorized", { "www-authenticate": 'Bearer realm="mochi-insight"' });
+          return send(res, 401, "unauthorized", { "www-authenticate": 'Basic realm="mochi-insight"' });
         }
       }
 
