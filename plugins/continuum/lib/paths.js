@@ -201,6 +201,11 @@ export function telemetryConfigPath(projectDir) {
 export function telemetryQueuePath(projectDir) {
   return path.join(telemetryDir(projectDir), "queue.jsonl");
 }
+// flush-watermark.json persists the last-successfully-flushed line offset so
+// that consecutive flush() calls only POST genuinely new events (no duplicates).
+export function telemetryWatermarkPath(projectDir) {
+  return path.join(telemetryDir(projectDir), "flush-watermark.json");
+}
 // reviews/ holds Zone-B critiques (full suggestion_text) — NEVER auto-sent.
 export function telemetryReviewsDir(projectDir) {
   return path.join(telemetryDir(projectDir), "reviews");
