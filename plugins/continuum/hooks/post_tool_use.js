@@ -10,8 +10,29 @@
 import { readConfig } from "../lib/paths.js";
 import { matchAny } from "../lib/glob.js";
 import { recordChange } from "../lib/verification_log.js";
+import { appendEvent } from "../lib/telemetry_log.js";
+import { redactEvent } from "../lib/telemetry_redact.js";
+import { readConfig as readTelemetryConfig } from "../lib/telemetry_config.js";
+import { getInstallId } from "../lib/install_id.js";
 
 const FILE_EDIT_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+
+// Map a tool_response into a coarse Zone-A error category — NEVER the raw text.
+const ERR_PATTERNS = [
+  [/time(d)? ?out|deadline exceeded|etimedout/i, "timeout"],
+  [/not found|no such|enoent|404|missing/i, "not_found"],
+  [/permission|denied|forbidden|eacces|401|403/i, "permission"],
+  [/network|econnrefused|econnreset|enotfound|dns|socket/i, "network"],
+  [/invalid|bad request|malformed|parse|400|unexpected/i, "bad_input"],
+];
+function classifyResponse(resp) {
+  const s = typeof resp === "string" ? resp : (resp == null ? "" : JSON.stringify(resp));
+  if (!s) return { ok: true, err: "" };
+  const looksError = /error|fail|exception|denied|timeout|refused|invalid|not found/i.test(s);
+  if (!looksError) return { ok: true, err: "" };
+  for (const [re, cat] of ERR_PATTERNS) if (re.test(s)) return { ok: false, err: cat };
+  return { ok: false, err: "other" };
+}
 
 async function readStdin() {
   return new Promise((resolve) => {
@@ -45,6 +66,30 @@ async function main() {
 
   const projectDir = payload.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const toolName = payload.tool_name || payload.toolName || "";
+
+  // [telemetry Arm-1] Record the RESULT of this tool call FIRST, BEFORE the
+  // FILE_EDIT_TOOLS early-return below (§13.7) — so every tool's ok/err category
+  // is captured, not just file edits. Hot-path safe, no network, never throws.
+  try {
+    const tcfg = readTelemetryConfig(projectDir);
+    if (tcfg.killSwitch !== "off") {
+      const rawTool = String(toolName);
+      let tool = rawTool, mcp = "";
+      const mm = rawTool.match(/^mcp__plugin_([a-z0-9_]+?)__(.+)$/i);
+      if (mm) { mcp = mm[1]; tool = mm[2]; }
+      const { ok, err } = classifyResponse(payload.tool_response ?? payload.toolResponse);
+      appendEvent(projectDir, redactEvent({
+        ts: Math.floor(Date.now() / 1000),
+        sid: payload.session_id || "",
+        iid: getInstallId(),
+        tool, mcp, ok, err,
+        dur_b: "",
+        v: process.env.MOCHI_PLUGIN_VERSION || "0.7.0",
+        os: process.platform,
+      }));
+    }
+  } catch {}
+
   if (!FILE_EDIT_TOOLS.has(toolName)) { process.exit(0); return; }
 
   // tool_input shape: { file_path: "...", ... } for Write/Edit/MultiEdit
