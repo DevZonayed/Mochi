@@ -138,19 +138,20 @@
     for (const c of legacy.comments) { const o = c.origin || originOf(); (byOrigin[o] = byOrigin[o] || []).push(c); }
     for (const o of Object.keys(byOrigin)) {
       const s = newSessionObj(o, "Session 1");
-      s.comments = byOrigin[o];
+      s.comments = byOrigin[o].map((c) => ({ ...c, sessionId: s.id }));
       store.sessions[s.id] = s;
       if (!store.activeByOrigin[o]) store.activeByOrigin[o] = s.id;
     }
     if (legacy.taughtScroll) store.taughtScroll = true;
     saveStore();
   }
+  function flushStore() {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    try { lastWriteJson = JSON.stringify(store); chrome.storage.local.set({ [DKEY]: store }); } catch {}
+  }
   function saveStore() {
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      try { lastWriteJson = JSON.stringify(store); chrome.storage.local.set({ [DKEY]: store }); } catch {}
-    }, 120);
+    saveTimer = setTimeout(flushStore, 120);
   }
   function saveSession() { saveStore(); }   // legacy name
 
@@ -293,7 +294,7 @@
 
       /* ---- list panel ---- */
       /* ---- floating navigator ---- */
-      .nav { position:fixed; right:84px; bottom:18px; width:330px; max-height:min(70vh,560px); background:var(--bg); color:var(--tx);
+      .nav { position:fixed; right:84px; bottom:18px; width:min(330px, calc(100vw - 96px)); max-height:min(70vh,560px); background:var(--bg); color:var(--tx);
         border:1px solid var(--bd); border-radius:16px; box-shadow:var(--sh); z-index:8; pointer-events:auto;
         display:flex; flex-direction:column; overflow:hidden;
         opacity:0; transform:translateY(12px) scale(.96); transform-origin:bottom right;
@@ -327,6 +328,9 @@
       .srow .smeta { font-size:11px; color:var(--soft); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .srow .ico.mini { opacity:0; }
       .srow:hover .ico.mini { opacity:.85; }
+      .srow .ico.mini.armed { opacity:1; background:var(--dng); color:#fff; }
+      .rename-input { width:100%; font-family:inherit; font-size:13px; font-weight:600; color:var(--tx); background:var(--bg);
+        border:1px solid var(--pri); border-radius:6px; padding:2px 6px; outline:none; }
       .grp-h { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--mut); padding:11px 12px 5px; }
       .row { display:flex; gap:10px; padding:9px 12px; cursor:pointer; align-items:flex-start; transition:background 100ms; }
       .row:hover { background:var(--bg2); }
@@ -657,6 +661,10 @@
   function findCommentById(id) { const s = findCommentSession(id); return s ? s.comments.find((c) => c.id === id) : null; }
   // Scroll to a comment's element on the CURRENT page. Returns false if absent.
   function scrollToComment(c) {
+    // Only scroll in place when the comment belongs to THIS page — otherwise a
+    // selector that also happens to exist here would steal the click and skip
+    // navigation to the comment's real page.
+    if (c.origin !== originOf() || c.route !== routeOf()) return false;
     let node = null; try { node = document.querySelector(c.selector); } catch {}
     if (!node) return false;
     node.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -680,7 +688,9 @@
   function maybeRunPending() {
     const p = store.pending; if (!p) return;
     const c = findCommentById(p.commentId);
-    if (!c || c.origin !== originOf()) return;   // not on the target site yet
+    // Wait until we're on the comment's exact page (origin + route); a route
+    // change will call this again. Don't clear until then.
+    if (!c || c.origin !== originOf() || c.route !== routeOf()) return;
     let tries = 0;
     if (pendingTimer) cancelAnimationFrame(pendingTimer);
     const tick = () => {
@@ -728,7 +738,6 @@
       else if (x === "filter-all") { panelFilter = "all"; renderPanel(); }
       else if (x === "new") { const s = newSession(); viewSessionId = s.id; panelView = "comments"; updateCounts(); renderPins(); renderPanel(); toast("New session started"); }
       else if (x === "copy") copyBrief(panelView === "comments" && viewSessionId ? store.sessions[viewSessionId] : undefined);
-      else if (x === "makeactive") { if (viewSessionId) { switchSession(viewSessionId); updateCounts(); renderPins(); if (devState.open) renderDevPins(); renderPanel(); toast("Switched to this session"); } }
     });
   }
   function renderPanel() {
@@ -774,21 +783,59 @@
         const act = e.target.closest("[data-act]");
         if (act) {
           e.stopPropagation();
-          if (act.dataset.act === "rename") { const name = window.prompt("Rename session", s.name); if (name != null) { renameSession(s.id, name); renderPanel(); } }
-          else if (act.dataset.act === "del") { if (window.confirm(`Delete "${s.name}" and its ${s.comments.length} comment(s)?`)) { deleteSession(s.id); updateCounts(); renderPins(); if (devState.open) renderDevPins(); renderPanel(); } }
+          if (act.dataset.act === "rename") startRename(row, s);
+          else if (act.dataset.act === "del") armDelete(row, s);
           return;
         }
-        viewSessionId = s.id; panelView = "comments"; renderPanel();
+        // Open the session's comments. On the current site, also make it active
+        // so new comments + pins follow the session you're looking at.
+        viewSessionId = s.id; panelView = "comments";
+        if (s.origin === originOf()) { switchSession(s.id); updateCounts(); renderPins(); if (devState.open) renderDevPins(); }
+        renderPanel();
       });
       body.appendChild(row);
     }
+  }
+  // Inline rename (stays in the closed shadow — host page can't suppress it).
+  function startRename(row, s) {
+    const nameEl = row.querySelector(".sname");
+    if (!nameEl || nameEl.querySelector("input")) return;
+    const input = document.createElement("input");
+    input.className = "rename-input"; input.value = s.name;
+    nameEl.innerHTML = ""; nameEl.appendChild(input);
+    input.focus(); input.select();
+    let done = false;
+    const commit = (save) => { if (done) return; done = true; if (save) renameSession(s.id, input.value); renderPanel(); };
+    input.addEventListener("click", (e) => e.stopPropagation());
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); commit(true); }
+      else if (e.key === "Escape") { e.preventDefault(); commit(false); }
+    });
+    input.addEventListener("blur", () => commit(true));
+  }
+  // Two-tap delete confirm (in-shadow; no native confirm()).
+  let delArmedId = null, delArmTimer = null;
+  function armDelete(row, s) {
+    if (delArmedId === s.id) {
+      delArmedId = null; if (delArmTimer) { clearTimeout(delArmTimer); delArmTimer = null; }
+      deleteSession(s.id); updateCounts(); renderPins(); if (devState.open) renderDevPins(); renderPanel();
+      toast("Session deleted");
+      return;
+    }
+    delArmedId = s.id;
+    const btn = row.querySelector('[data-act="del"]');
+    if (btn) btn.classList.add("armed");
+    toast(`Delete "${s.name}"? Tap the trash again to confirm`);
+    if (delArmTimer) clearTimeout(delArmTimer);
+    delArmTimer = setTimeout(() => { delArmedId = null; const b = row.querySelector('[data-act="del"]'); if (b) b.classList.remove("armed"); }, 2600);
   }
   function renderCommentsView(s, title, tools, body, ft) {
     title.textContent = s.name;
     const isActive = activeSessionId() === s.id && s.origin === originOf();
     tools.innerHTML = `
       <div class="cmeta">${escapeHtml(shortOrigin(s.origin))} · ${s.comments.length} comment${s.comments.length === 1 ? "" : "s"}</div>
-      ${isActive ? '<span class="chip on">active</span>' : `<button class="chip" data-x="makeactive">Make active</button>`}`;
+      ${isActive ? '<span class="chip on">active</span>' : (s.origin === originOf() ? '<span class="chip" style="opacity:.6">other session</span>' : '<span class="chip" style="opacity:.6">other site</span>')}`;
     ft.innerHTML = s.comments.length ? `<button class="navbtn" data-x="copy">${ICO.copy}<span>Copy brief</span></button>` : "";
     if (!s.comments.length) { body.innerHTML = `<div class="empty">No comments in this session yet.</div>`; return; }
     const groups = {};
@@ -1110,6 +1157,10 @@
     const nv = changes[DKEY].newValue;
     if (!nv) return;
     if (JSON.stringify(nv) === lastWriteJson) return;   // our own write — ignore
+    // We have unsaved local edits pending — persist ours instead of discarding
+    // them; the other tab will then sync to our version. (Avoids the 120ms
+    // last-write-wins data-loss race.)
+    if (saveTimer) { flushStore(); return; }
     applyStore(nv);
     updateCounts(); renderPins(); if (devState.open) renderDevPins(); if (panelEl) renderPanel();
   }
