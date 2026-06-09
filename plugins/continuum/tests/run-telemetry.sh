@@ -124,6 +124,48 @@ CTX_AR=$(echo "$OUT_AR" | python3 -c "import json,sys; print(json.load(sys.stdin
 echo "$CTX_AR" | grep -qF "/mochi:review-session" && ok "auto-review directive references review-session" || fail "auto-review directive missing"
 [ ! -f "$AR_REPO/.continuum/telemetry/.pending-review.json" ] && ok "pending-review marker consumed (single-emit)" || fail "pending marker not cleared"
 
+# ---- TT14: session_end close-event + pending-review marker + flush ---------
+echo
+echo "TT14 — session_end close event + pending-review marker + flush (§5/§6)"
+SE_REPO="$TMP/serepo"; mkdir -p "$SE_REPO/.continuum/telemetry" "$SE_REPO/.continuum/archive/transcripts"
+git -C "$SE_REPO" init -q
+printf '{"decided":true,"share":true,"reviewAuto":true,"killSwitch":"on","sampleN":1}\n' > "$SE_REPO/.continuum/telemetry/config.json"
+TR="$SE_REPO/tr.jsonl"; printf '{"role":"user","content":"hi"}\n' > "$TR"
+echo '{"session_id":"se","cwd":"'"$SE_REPO"'","hook_event_name":"SessionEnd","why_session_ended":"logout","transcript_path":"'"$TR"'"}' \
+  | node "$PLUGIN_DIR/hooks/session_end.js" > /dev/null 2>&1
+[ -f "$SE_REPO/.continuum/telemetry/.pending-review.json" ] && ok "pending-review marker written" || fail "no pending-review marker"
+TT14=$(node -e "
+const fs=require('node:fs');
+const f='$SE_REPO/.continuum/telemetry/events.jsonl';
+if(!fs.existsSync(f)){console.log('NO EVENTS');process.exit(0);}
+const e=JSON.parse(fs.readFileSync(f,'utf8').trim().split('\n').pop());
+let bad=0; const t=(c,l)=>{ if(!c){console.log('FAIL',l);bad++;} };
+t(e.tool==='session_close','close event tool=session_close');
+t(!('why_session_ended' in e),'raw reason not stored as a key (Zone-A only)');
+console.log(bad===0?'SE OK':'SE BAD '+bad);")
+echo "$TT14" | grep -qF "SE OK" && ok "session_end close event Zone-A" || fail "session_end: $TT14"
+M=$(node -e "const fs=require('node:fs');const m=JSON.parse(fs.readFileSync('$SE_REPO/.continuum/telemetry/.pending-review.json','utf8'));console.log(m.archive_path?'HAS_ARCHIVE':'NO_ARCHIVE');")
+[ "$M" = "HAS_ARCHIVE" ] && ok "pending-review marker carries archive_path" || fail "marker missing archive_path"
+
+# ---- TT15: pre_compact appends a compaction-counter event ------------------
+echo
+echo "TT15 — pre_compact compaction counter event"
+PC_REPO="$TMP/pcrepo"; mkdir -p "$PC_REPO/.continuum/chain/links" "$PC_REPO/.continuum/archive/transcripts"
+git -C "$PC_REPO" init -q
+TRC="$PC_REPO/tr.jsonl"; printf '{"role":"user","content":"hi"}\n' > "$TRC"
+echo '{"session_id":"pc","cwd":"'"$PC_REPO"'","hook_event_name":"PreCompact","matcher":"auto","transcript_path":"'"$TRC"'"}' \
+  | node "$PLUGIN_DIR/hooks/pre_compact.js" > /dev/null 2>&1
+TT15=$(node -e "
+const fs=require('node:fs');
+const f='$PC_REPO/.continuum/telemetry/events.jsonl';
+if(!fs.existsSync(f)){console.log('NO EVENTS');process.exit(0);}
+const e=JSON.parse(fs.readFileSync(f,'utf8').trim().split('\n').pop());
+let bad=0; const t=(c,l)=>{ if(!c){console.log('FAIL',l);bad++;} };
+t(e.tool==='session_compact','compact event tool=session_compact');
+t(!('transcript_path' in e),'no transcript path leaked');
+console.log(bad===0?'PC OK':'PC BAD '+bad);")
+echo "$TT15" | grep -qF "PC OK" && ok "pre_compact compaction counter Zone-A" || fail "pre_compact: $TT15"
+
 # ---- (later tasks append assertions above this summary) --------------------
 echo
 echo "─────────────────────────────"

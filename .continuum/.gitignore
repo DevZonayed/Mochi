@@ -16,3 +16,9 @@ feedback/
 # Chain archives are recoverable but large. Keep them local by default;
 # remove this line if you want to commit them for cross-device sync.
 archive/
+verification/
+runs/
+uploads/
+.env-provenance.json
+comms/*
+!comms/config.json
