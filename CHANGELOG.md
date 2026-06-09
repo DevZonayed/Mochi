@@ -8,6 +8,21 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.3] — 2026-06-09
+
+### Added (Comment Mode — responsive)
+
+- **Custom device size** in the responsive frame — a "Custom" option with
+  width × height inputs.
+- **Scale-to-fit for oversize frames.** The preview iframe renders at the
+  *true* device size (so media queries stay accurate) and is visually scaled to
+  fit your window when the chosen size is larger than the viewport, with the
+  zoom level shown (e.g. `2560 × 1440 · 47%`); it re-fits on window resize. The
+  comment overlay (hover highlight, pins, popover) is scale-aware, so picking
+  stays pixel-accurate at any zoom.
+
+---
+
 ## [0.7.2] — 2026-06-09
 
 ### Fixed (Comment Mode)
