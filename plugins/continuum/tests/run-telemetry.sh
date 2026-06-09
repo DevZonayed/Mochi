@@ -166,6 +166,31 @@ t(!('transcript_path' in e),'no transcript path leaked');
 console.log(bad===0?'PC OK':'PC BAD '+bad);")
 echo "$TT15" | grep -qF "PC OK" && ok "pre_compact compaction counter Zone-A" || fail "pre_compact: $TT15"
 
+# ---- TT16: telemetry_cli subcommands + show===emit redact (§13.1 N2) -------
+echo
+echo "TT16 — telemetry_cli status/show/on/off/review-auto/flush/reset-id/purge"
+CLI_REPO="$TMP/clirepo"; mkdir -p "$CLI_REPO/.continuum/telemetry"
+git -C "$CLI_REPO" init -q
+node -e "import('$PLUGIN_DIR/lib/telemetry_log.js').then(m=>{m.appendEvent('$CLI_REPO',{ts:1,sid:'s',iid:'i',tool:'Read',mcp:'',ok:true,err:'',dur_b:'0-1s',v:'0.7.0',os:'darwin'});m.appendEvent('$CLI_REPO',{ts:2,sid:'s',iid:'i',tool:'mcp__plugin_thirdparty__do',mcp:'thirdparty',ok:false,err:'/secret/path token=sk-1',dur_b:'1-3s',v:'0.7.0',os:'darwin'});});"
+node "$PLUGIN_DIR/lib/telemetry_cli.js" on --project-dir "$CLI_REPO" > /dev/null
+STAT=$(node "$PLUGIN_DIR/lib/telemetry_cli.js" status --project-dir "$CLI_REPO")
+echo "$STAT" | grep -qiE "share.*(on|true)" && ok "status shows sharing on" || fail "status missing share state"
+echo "$STAT" | grep -qiE "token" && ok "status discloses auto-review token cost (M4)" || fail "status missing token-cost note"
+SHOW=$(node "$PLUGIN_DIR/lib/telemetry_cli.js" show --project-dir "$CLI_REPO")
+echo "$SHOW" | grep -q "thirdparty_tool" && ok "show buckets third-party tool" || fail "show leaked third-party tool name"
+echo "$SHOW" | grep -q "sk-1" && fail "show LEAKED a token (redactor bypassed)" || ok "show contains no secret/token"
+echo "$SHOW" | grep -q "/secret/path" && fail "show LEAKED a path" || ok "show contains no path"
+node "$PLUGIN_DIR/lib/telemetry_cli.js" review-auto on --project-dir "$CLI_REPO" > /dev/null
+node -e "import('$PLUGIN_DIR/lib/telemetry_config.js').then(m=>{process.exit(m.readConfig('$CLI_REPO').reviewAuto===true?0:1);})" && ok "review-auto on persisted" || fail "review-auto not persisted"
+node "$PLUGIN_DIR/lib/telemetry_cli.js" off --project-dir "$CLI_REPO" > /dev/null
+node -e "import('$PLUGIN_DIR/lib/telemetry_config.js').then(m=>{process.exit(m.readConfig('$CLI_REPO').share===false?0:1);})" && ok "off sets share=false" || fail "off did not unset share"
+ID_BEFORE=$(node -e "import('$PLUGIN_DIR/lib/install_id.js').then(m=>console.log(m.getInstallId()));")
+ID_AFTER=$(node "$PLUGIN_DIR/lib/telemetry_cli.js" reset-id --project-dir "$CLI_REPO" | tr -d '[:space:]')
+ID_NEW=$(node -e "import('$PLUGIN_DIR/lib/install_id.js').then(m=>console.log(m.getInstallId()));")
+[ -n "$ID_NEW" ] && [ "$ID_NEW" != "$ID_BEFORE" ] && ok "reset-id rotated the install-id" || fail "reset-id did not rotate"
+node "$PLUGIN_DIR/lib/telemetry_cli.js" purge --project-dir "$CLI_REPO" > /dev/null
+[ ! -f "$CLI_REPO/.continuum/telemetry/events.jsonl" ] && ok "purge removed local events" || fail "purge left events behind"
+
 # ---- (later tasks append assertions above this summary) --------------------
 echo
 echo "─────────────────────────────"
