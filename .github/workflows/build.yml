@@ -48,6 +48,13 @@ jobs:
           echo "Browser bundle size: $(du -h server/dist/server.bundle.mjs | cut -f1)"
           echo "Comms bundle size: $(du -h server/dist/comms.bundle.mjs | cut -f1)"
 
+      - name: Telemetry plugin harness
+        run: bash plugins/continuum/tests/run-telemetry.sh
+
+      - name: Telemetry ingest server tests
+        working-directory: telemetry-server
+        run: node --test
+
       - name: Commit bundle if it changed
         run: |
           if [[ -z "$(git status --porcelain server/dist/)" ]]; then
