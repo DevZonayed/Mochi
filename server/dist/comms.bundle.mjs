@@ -3235,8 +3235,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path5) {
-      let input = path5;
+    function removeDotSegments(path6) {
+      let input = path6;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3488,8 +3488,8 @@ var require_schemes = __commonJS({
         wsComponent.secure = void 0;
       }
       if (wsComponent.resourceName) {
-        const [path5, query] = wsComponent.resourceName.split("?");
-        wsComponent.path = path5 && path5 !== "/" ? path5 : void 0;
+        const [path6, query] = wsComponent.resourceName.split("?");
+        wsComponent.path = path6 && path6 !== "/" ? path6 : void 0;
         wsComponent.query = query;
         wsComponent.resourceName = void 0;
       }
@@ -6882,12 +6882,12 @@ var require_dist = __commonJS({
         throw new Error(`Unknown format "${name}"`);
       return f;
     };
-    function addFormats(ajv, list, fs8, exportName) {
+    function addFormats(ajv, list, fs9, exportName) {
       var _a3;
       var _b;
       (_a3 = (_b = ajv.opts.code).formats) !== null && _a3 !== void 0 ? _a3 : _b.formats = (0, codegen_1._)`require("ajv-formats/dist/formats").${exportName}`;
       for (const f of list)
-        ajv.addFormat(f, fs8[f]);
+        ajv.addFormat(f, fs9[f]);
     }
     module.exports = exports = formatsPlugin;
     Object.defineProperty(exports, "__esModule", { value: true });
@@ -112814,10 +112814,10 @@ var require_reach = __commonJS({
       }
       const isChainArray = Array.isArray(chain);
       Assert(!isChainArray || !options.separator, "Separator option is not valid for array-based chain");
-      const path5 = isChainArray ? chain : chain.split(options.separator || ".");
+      const path6 = isChainArray ? chain : chain.split(options.separator || ".");
       let ref = obj;
-      for (let i = 0; i < path5.length; ++i) {
-        let key = path5[i];
+      for (let i = 0; i < path6.length; ++i) {
+        let key = path6[i];
         const type = options.iterables && internals.iterables(ref);
         if (Array.isArray(ref) || type === "set") {
           const number3 = Number(key);
@@ -112827,7 +112827,7 @@ var require_reach = __commonJS({
         }
         if (!ref || typeof ref === "function" && options.functions === false || // Defaults to true
         !type && ref[key] === void 0) {
-          Assert(!options.strict || i + 1 === path5.length, "Missing segment", key, "in reach path ", chain);
+          Assert(!options.strict || i + 1 === path6.length, "Missing segment", key, "in reach path ", chain);
           Assert(typeof ref === "object" || options.functions === true || typeof ref !== "function", "Invalid segment", key, "in reach path ", chain);
           ref = options.default;
           break;
@@ -113144,8 +113144,8 @@ var require_applyToDefaults = __commonJS({
       const nullOverride = options.nullOverride !== void 0 ? options.nullOverride : false;
       return Merge(copy, source, { nullOverride, mergeArrays: false });
     };
-    internals.reachCopy = function(dst, src, path5) {
-      for (const segment of path5) {
+    internals.reachCopy = function(dst, src, path6) {
+      for (const segment of path6) {
         if (!(segment in src)) {
           return;
         }
@@ -113157,14 +113157,14 @@ var require_applyToDefaults = __commonJS({
       }
       const value = src;
       let ref = dst;
-      for (let i = 0; i < path5.length - 1; ++i) {
-        const segment = path5[i];
+      for (let i = 0; i < path6.length - 1; ++i) {
+        const segment = path6[i];
         if (typeof ref[segment] !== "object") {
           ref[segment] = {};
         }
         ref = ref[segment];
       }
-      ref[path5[path5.length - 1]] = value;
+      ref[path6[path6.length - 1]] = value;
     };
   }
 });
@@ -123998,11 +123998,11 @@ var require_mime_types = __commonJS({
       }
       return exts[0];
     }
-    function lookup(path5) {
-      if (!path5 || typeof path5 !== "string") {
+    function lookup(path6) {
+      if (!path6 || typeof path6 !== "string") {
         return false;
       }
-      var extension3 = extname("x." + path5).toLowerCase().substr(1);
+      var extension3 = extname("x." + path6).toLowerCase().substr(1);
       if (!extension3) {
         return false;
       }
@@ -125107,11 +125107,11 @@ var require_form_data = __commonJS({
     "use strict";
     var CombinedStream = require_combined_stream();
     var util4 = __require("util");
-    var path5 = __require("path");
+    var path6 = __require("path");
     var http3 = __require("http");
     var https2 = __require("https");
     var parseUrl2 = __require("url").parse;
-    var fs8 = __require("fs");
+    var fs9 = __require("fs");
     var Stream = __require("stream").Stream;
     var crypto5 = __require("crypto");
     var mime = require_mime_types();
@@ -125178,7 +125178,7 @@ var require_form_data = __commonJS({
         if (value.end != void 0 && value.end != Infinity && value.start != void 0) {
           callback(null, value.end + 1 - (value.start ? value.start : 0));
         } else {
-          fs8.stat(value.path, function(err2, stat2) {
+          fs9.stat(value.path, function(err2, stat2) {
             if (err2) {
               callback(err2);
               return;
@@ -125235,11 +125235,11 @@ var require_form_data = __commonJS({
     FormData3.prototype._getContentDisposition = function(value, options) {
       var filename;
       if (typeof options.filepath === "string") {
-        filename = path5.normalize(options.filepath).replace(/\\/g, "/");
+        filename = path6.normalize(options.filepath).replace(/\\/g, "/");
       } else if (options.filename || value && (value.name || value.path)) {
-        filename = path5.basename(options.filename || value && (value.name || value.path));
+        filename = path6.basename(options.filename || value && (value.name || value.path));
       } else if (value && value.readable && hasOwn(value, "httpVersion")) {
-        filename = path5.basename(value.client._httpMessage.path || "");
+        filename = path6.basename(value.client._httpMessage.path || "");
       }
       if (filename) {
         return 'filename="' + filename + '"';
@@ -125436,9 +125436,9 @@ function isVisitable(thing) {
 function removeBrackets(key) {
   return utils_default.endsWith(key, "[]") ? key.slice(0, -2) : key;
 }
-function renderKey(path5, key, dots) {
-  if (!path5) return key;
-  return path5.concat(key).map(function each(token, i) {
+function renderKey(path6, key, dots) {
+  if (!path6) return key;
+  return path6.concat(key).map(function each(token, i) {
     token = removeBrackets(token);
     return !dots && i ? "[" + token + "]" : token;
   }).join(dots ? "." : "");
@@ -125489,13 +125489,13 @@ function toFormData(obj, formData, options) {
     }
     return value;
   }
-  function defaultVisitor(value, key, path5) {
+  function defaultVisitor(value, key, path6) {
     let arr = value;
     if (utils_default.isReactNative(formData) && utils_default.isReactNativeBlob(value)) {
-      formData.append(renderKey(path5, key, dots), convertValue(value));
+      formData.append(renderKey(path6, key, dots), convertValue(value));
       return false;
     }
-    if (value && !path5 && typeof value === "object") {
+    if (value && !path6 && typeof value === "object") {
       if (utils_default.endsWith(key, "{}")) {
         key = metaTokens ? key : key.slice(0, -2);
         value = JSON.stringify(value);
@@ -125514,7 +125514,7 @@ function toFormData(obj, formData, options) {
     if (isVisitable(value)) {
       return true;
     }
-    formData.append(renderKey(path5, key, dots), convertValue(value));
+    formData.append(renderKey(path6, key, dots), convertValue(value));
     return false;
   }
   const stack = [];
@@ -125523,7 +125523,7 @@ function toFormData(obj, formData, options) {
     convertValue,
     isVisitable
   });
-  function build(value, path5, depth = 0) {
+  function build(value, path6, depth = 0) {
     if (utils_default.isUndefined(value)) return;
     if (depth > maxDepth) {
       throw new AxiosError_default(
@@ -125532,13 +125532,13 @@ function toFormData(obj, formData, options) {
       );
     }
     if (stack.indexOf(value) !== -1) {
-      throw new Error("Circular reference detected in " + path5.join("."));
+      throw new Error("Circular reference detected in " + path6.join("."));
     }
     stack.push(value);
     utils_default.forEach(value, function each(el, key) {
-      const result = !(utils_default.isUndefined(el) || el === null) && visitor.call(formData, el, utils_default.isString(key) ? key.trim() : key, path5, exposedHelpers);
+      const result = !(utils_default.isUndefined(el) || el === null) && visitor.call(formData, el, utils_default.isString(key) ? key.trim() : key, path6, exposedHelpers);
       if (result === true) {
-        build(el, path5 ? path5.concat(key) : [key], depth + 1);
+        build(el, path6 ? path6.concat(key) : [key], depth + 1);
       }
     });
     stack.pop();
@@ -125812,7 +125812,7 @@ var init_platform = __esm({
 // node_modules/axios/lib/helpers/toURLEncodedForm.js
 function toURLEncodedForm(data, options) {
   return toFormData_default(data, new platform_default.classes.URLSearchParams(), {
-    visitor: function(value, key, path5, helpers) {
+    visitor: function(value, key, path6, helpers) {
       if (platform_default.isNode && utils_default.isBuffer(value)) {
         this.append(key, value.toString("base64"));
         return false;
@@ -125850,11 +125850,11 @@ function arrayToObject(arr) {
   return obj;
 }
 function formDataToJSON(formData) {
-  function buildPath(path5, value, target, index) {
-    let name = path5[index++];
+  function buildPath(path6, value, target, index) {
+    let name = path6[index++];
     if (name === "__proto__") return true;
     const isNumericKey = Number.isFinite(+name);
-    const isLast = index >= path5.length;
+    const isLast = index >= path6.length;
     name = !name && utils_default.isArray(target) ? target.length : name;
     if (isLast) {
       if (utils_default.hasOwnProp(target, name)) {
@@ -125867,7 +125867,7 @@ function formDataToJSON(formData) {
     if (!utils_default.hasOwnProp(target, name) || !utils_default.isObject(target[name])) {
       target[name] = [];
     }
-    const result = buildPath(path5, value, target[name], index);
+    const result = buildPath(path6, value, target[name], index);
     if (result && utils_default.isArray(target[name])) {
       target[name] = arrayToObject(target[name]);
     }
@@ -129148,9 +129148,9 @@ var init_http = __esm({
           auth = urlUsername + ":" + urlPassword;
         }
         auth && headers.delete("authorization");
-        let path5;
+        let path6;
         try {
-          path5 = buildURL(
+          path6 = buildURL(
             parsed.pathname + parsed.search,
             config2.params,
             config2.paramsSerializer
@@ -129168,7 +129168,7 @@ var init_http = __esm({
           false
         );
         const options = Object.assign(/* @__PURE__ */ Object.create(null), {
-          path: path5,
+          path: path6,
           method,
           headers: toByteStringHeaderObject(headers),
           agents: { http: config2.httpAgent, https: config2.httpsAgent },
@@ -129545,14 +129545,14 @@ var init_cookies = __esm({
     cookies_default = platform_default.hasStandardBrowserEnv ? (
       // Standard browser envs support document.cookie
       {
-        write(name, value, expires, path5, domain, secure, sameSite) {
+        write(name, value, expires, path6, domain, secure, sameSite) {
           if (typeof document === "undefined") return;
           const cookie = [`${name}=${encodeURIComponent(value)}`];
           if (utils_default.isNumber(expires)) {
             cookie.push(`expires=${new Date(expires).toUTCString()}`);
           }
-          if (utils_default.isString(path5)) {
-            cookie.push(`path=${path5}`);
+          if (utils_default.isString(path6)) {
+            cookie.push(`path=${path6}`);
           }
           if (utils_default.isString(domain)) {
             cookie.push(`domain=${domain}`);
@@ -144512,11 +144512,11 @@ function linkParents(element) {
   return element;
 }
 function getElementPath(element) {
-  let path5 = "";
+  let path6 = "";
   if (element.parent && element.parent.name !== "dtd") {
-    path5 += `${getElementPath(element.parent)}/`;
+    path6 += `${getElementPath(element.parent)}/`;
   }
-  return path5 + element.name;
+  return path6 + element.name;
 }
 var import_debug14, debug14, EbmlContentError, ParseAction, EbmlIterator;
 var init_EbmlIterator = __esm({
@@ -147728,7 +147728,7 @@ var init_lib5 = __esm({
 import { exec } from "child_process";
 import * as Crypto from "crypto";
 import { once } from "events";
-import { createReadStream, createWriteStream, promises as fs3, WriteStream } from "fs";
+import { createReadStream, createWriteStream, promises as fs4, WriteStream } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { Readable as Readable2, Transform } from "stream";
@@ -147810,9 +147810,9 @@ async function generateThumbnail(file, mediaType, options) {
     const imgFilename = join(getTmpFilesDirectory(), generateMessageIDV2() + ".jpg");
     try {
       await extractVideoThumb(file, imgFilename, "00:00:00", { width: 32, height: 32 });
-      const buff = await fs3.readFile(imgFilename);
+      const buff = await fs4.readFile(imgFilename);
       thumbnail = buff.toString("base64");
-      await fs3.unlink(imgFilename);
+      await fs4.unlink(imgFilename);
     } catch (err2) {
       options.logger?.debug("could not generate video thumb: " + err2);
     }
@@ -147890,14 +147890,14 @@ var init_messages_media = __esm({
         fileWriteStream.destroy();
         stream4.destroy();
         try {
-          await fs3.unlink(filePath);
+          await fs4.unlink(filePath);
         } catch {
         }
         throw error2;
       }
     };
-    extractVideoThumb = async (path5, destPath, time3, size) => new Promise((resolve, reject) => {
-      const cmd = `ffmpeg -ss ${time3} -i ${path5} -y -vf scale=${size.width}:-1 -vframes 1 -f image2 ${destPath}`;
+    extractVideoThumb = async (path6, destPath, time3, size) => new Promise((resolve, reject) => {
+      const cmd = `ffmpeg -ss ${time3} -i ${path6} -y -vf scale=${size.width}:-1 -vframes 1 -f image2 ${destPath}`;
       exec(cmd, (err2) => {
         if (err2) {
           reject(err2);
@@ -148072,9 +148072,9 @@ var init_messages_media = __esm({
         sha256Enc.destroy();
         stream4.destroy();
         try {
-          await fs3.unlink(encFilePath);
+          await fs4.unlink(encFilePath);
           if (originalFilePath) {
-            await fs3.unlink(originalFilePath);
+            await fs4.unlink(originalFilePath);
           }
         } catch (err2) {
           logger?.error({ err: err2 }, "failed deleting tmp files");
@@ -148311,7 +148311,7 @@ var init_messages_media = __esm({
 
 // node_modules/@whiskeysockets/baileys/lib/Utils/messages.js
 import { randomBytes as randomBytes4 } from "crypto";
-import { promises as fs4 } from "fs";
+import { promises as fs5 } from "fs";
 function getAggregateVotesInPollMessage({ message, pollUpdates }, meId) {
   const opts = message?.pollCreationMessage?.options || message?.pollCreationMessageV2?.options || message?.pollCreationMessageV3?.options || [];
   const voteHashMap = opts.reduce((acc, opt) => {
@@ -148437,7 +148437,7 @@ var init_messages = __esm({
           mediaType,
           timeoutMs: options.mediaUploadTimeoutMs
         });
-        await fs4.unlink(filePath);
+        await fs5.unlink(filePath);
         const obj2 = proto.Message.fromObject({
           // todo: add more support here
           [`${mediaType}Message`]: MessageTypeProto[mediaType].fromObject({
@@ -148510,9 +148510,9 @@ var init_messages = __esm({
         })()
       ]).finally(async () => {
         try {
-          await fs4.unlink(encFilePath);
+          await fs5.unlink(encFilePath);
           if (originalFilePath) {
-            await fs4.unlink(originalFilePath);
+            await fs5.unlink(originalFilePath);
           }
           logger?.debug("removed tmp files");
         } catch (error2) {
@@ -153808,11 +153808,11 @@ var init_use_multi_file_auth_state = __esm({
     init_auth_utils();
     init_generics();
     fileLocks = /* @__PURE__ */ new Map();
-    getFileLock = (path5) => {
-      let mutex = fileLocks.get(path5);
+    getFileLock = (path6) => {
+      let mutex = fileLocks.get(path6);
       if (!mutex) {
         mutex = new Mutex();
-        fileLocks.set(path5, mutex);
+        fileLocks.set(path6, mutex);
       }
       return mutex;
     };
@@ -155834,8 +155834,8 @@ var require_req = __commonJS({
       if (req.originalUrl) {
         _req.url = req.originalUrl;
       } else {
-        const path5 = req.path;
-        _req.url = typeof path5 === "string" ? path5 : req.url ? req.url.path || req.url : void 0;
+        const path6 = req.path;
+        _req.url = typeof path6 === "string" ? path6 : req.url ? req.url.path || req.url : void 0;
       }
       if (req.query) {
         _req.query = req.query;
@@ -156000,14 +156000,14 @@ var require_redact = __commonJS({
       }
       return obj;
     }
-    function parsePath(path5) {
+    function parsePath(path6) {
       const parts = [];
       let current = "";
       let inBrackets = false;
       let inQuotes = false;
       let quoteChar = "";
-      for (let i = 0; i < path5.length; i++) {
-        const char = path5[i];
+      for (let i = 0; i < path6.length; i++) {
+        const char = path6[i];
         if (!inBrackets && char === ".") {
           if (current) {
             parts.push(current);
@@ -156138,10 +156138,10 @@ var require_redact = __commonJS({
       return current;
     }
     function redactPaths(obj, paths, censor, remove = false) {
-      for (const path5 of paths) {
-        const parts = parsePath(path5);
+      for (const path6 of paths) {
+        const parts = parsePath(path6);
         if (parts.includes("*")) {
-          redactWildcardPath(obj, parts, censor, path5, remove);
+          redactWildcardPath(obj, parts, censor, path6, remove);
         } else {
           if (remove) {
             removeKey(obj, parts);
@@ -156226,8 +156226,8 @@ var require_redact = __commonJS({
           }
         } else {
           if (afterWildcard.includes("*")) {
-            const wrappedCensor = typeof censor === "function" ? (value, path5) => {
-              const fullPath = [...pathArray.slice(0, pathLength), ...path5];
+            const wrappedCensor = typeof censor === "function" ? (value, path6) => {
+              const fullPath = [...pathArray.slice(0, pathLength), ...path6];
               return censor(value, fullPath);
             } : censor;
             redactWildcardPath(current, afterWildcard, wrappedCensor, originalPath, remove);
@@ -156262,8 +156262,8 @@ var require_redact = __commonJS({
         return null;
       }
       const pathStructure = /* @__PURE__ */ new Map();
-      for (const path5 of pathsToClone) {
-        const parts = parsePath(path5);
+      for (const path6 of pathsToClone) {
+        const parts = parsePath(path6);
         let current = pathStructure;
         for (let i = 0; i < parts.length; i++) {
           const part = parts[i];
@@ -156315,24 +156315,24 @@ var require_redact = __commonJS({
       }
       return cloneSelectively(obj, pathStructure);
     }
-    function validatePath(path5) {
-      if (typeof path5 !== "string") {
+    function validatePath(path6) {
+      if (typeof path6 !== "string") {
         throw new Error("Paths must be (non-empty) strings");
       }
-      if (path5 === "") {
+      if (path6 === "") {
         throw new Error("Invalid redaction path ()");
       }
-      if (path5.includes("..")) {
-        throw new Error(`Invalid redaction path (${path5})`);
+      if (path6.includes("..")) {
+        throw new Error(`Invalid redaction path (${path6})`);
       }
-      if (path5.includes(",")) {
-        throw new Error(`Invalid redaction path (${path5})`);
+      if (path6.includes(",")) {
+        throw new Error(`Invalid redaction path (${path6})`);
       }
       let bracketCount = 0;
       let inQuotes = false;
       let quoteChar = "";
-      for (let i = 0; i < path5.length; i++) {
-        const char = path5[i];
+      for (let i = 0; i < path6.length; i++) {
+        const char = path6[i];
         if ((char === '"' || char === "'") && bracketCount > 0) {
           if (!inQuotes) {
             inQuotes = true;
@@ -156346,20 +156346,20 @@ var require_redact = __commonJS({
         } else if (char === "]" && !inQuotes) {
           bracketCount--;
           if (bracketCount < 0) {
-            throw new Error(`Invalid redaction path (${path5})`);
+            throw new Error(`Invalid redaction path (${path6})`);
           }
         }
       }
       if (bracketCount !== 0) {
-        throw new Error(`Invalid redaction path (${path5})`);
+        throw new Error(`Invalid redaction path (${path6})`);
       }
     }
     function validatePaths(paths) {
       if (!Array.isArray(paths)) {
         throw new TypeError("paths must be an array");
       }
-      for (const path5 of paths) {
-        validatePath(path5);
+      for (const path6 of paths) {
+        validatePath(path6);
       }
     }
     function slowRedact(options = {}) {
@@ -156527,8 +156527,8 @@ var require_redaction = __commonJS({
         if (shape[k] === null) {
           o2[k] = (value) => topCensor(value, [k]);
         } else {
-          const wrappedCensor = typeof censor === "function" ? (value, path5) => {
-            return censor(value, [k, ...path5]);
+          const wrappedCensor = typeof censor === "function" ? (value, path6) => {
+            return censor(value, [k, ...path6]);
           } : censor;
           o2[k] = Redact({
             paths: shape[k],
@@ -156746,10 +156746,10 @@ var require_atomic_sleep = __commonJS({
 var require_sonic_boom = __commonJS({
   "node_modules/sonic-boom/index.js"(exports, module) {
     "use strict";
-    var fs8 = __require("fs");
+    var fs9 = __require("fs");
     var EventEmitter5 = __require("events");
     var inherits2 = __require("util").inherits;
-    var path5 = __require("path");
+    var path6 = __require("path");
     var sleep = require_atomic_sleep();
     var assert2 = __require("assert");
     var BUSY_WRITE_TIMEOUT = 100;
@@ -156803,20 +156803,20 @@ var require_sonic_boom = __commonJS({
       const mode = sonic.mode;
       if (sonic.sync) {
         try {
-          if (sonic.mkdir) fs8.mkdirSync(path5.dirname(file), { recursive: true });
-          const fd = fs8.openSync(file, flags, mode);
+          if (sonic.mkdir) fs9.mkdirSync(path6.dirname(file), { recursive: true });
+          const fd = fs9.openSync(file, flags, mode);
           fileOpened(null, fd);
         } catch (err2) {
           fileOpened(err2);
           throw err2;
         }
       } else if (sonic.mkdir) {
-        fs8.mkdir(path5.dirname(file), { recursive: true }, (err2) => {
+        fs9.mkdir(path6.dirname(file), { recursive: true }, (err2) => {
           if (err2) return fileOpened(err2);
-          fs8.open(file, flags, mode, fileOpened);
+          fs9.open(file, flags, mode, fileOpened);
         });
       } else {
-        fs8.open(file, flags, mode, fileOpened);
+        fs9.open(file, flags, mode, fileOpened);
       }
     }
     function SonicBoom(opts) {
@@ -156857,8 +156857,8 @@ var require_sonic_boom = __commonJS({
         this.flush = flushBuffer;
         this.flushSync = flushBufferSync;
         this._actualWrite = actualWriteBuffer;
-        fsWriteSync = () => fs8.writeSync(this.fd, this._writingBuf);
-        fsWrite = () => fs8.write(this.fd, this._writingBuf, this.release);
+        fsWriteSync = () => fs9.writeSync(this.fd, this._writingBuf);
+        fsWrite = () => fs9.write(this.fd, this._writingBuf, this.release);
       } else if (contentMode === void 0 || contentMode === kContentModeUtf8) {
         this._writingBuf = "";
         this.write = write2;
@@ -156867,15 +156867,15 @@ var require_sonic_boom = __commonJS({
         this._actualWrite = actualWrite;
         fsWriteSync = () => {
           if (Buffer.isBuffer(this._writingBuf)) {
-            return fs8.writeSync(this.fd, this._writingBuf);
+            return fs9.writeSync(this.fd, this._writingBuf);
           }
-          return fs8.writeSync(this.fd, this._writingBuf, "utf8");
+          return fs9.writeSync(this.fd, this._writingBuf, "utf8");
         };
         fsWrite = () => {
           if (Buffer.isBuffer(this._writingBuf)) {
-            return fs8.write(this.fd, this._writingBuf, this.release);
+            return fs9.write(this.fd, this._writingBuf, this.release);
           }
-          return fs8.write(this.fd, this._writingBuf, "utf8", this.release);
+          return fs9.write(this.fd, this._writingBuf, "utf8", this.release);
         };
       } else {
         throw new Error(`SonicBoom supports "${kContentModeUtf8}" and "${kContentModeBuffer}", but passed ${contentMode}`);
@@ -156932,7 +156932,7 @@ var require_sonic_boom = __commonJS({
           }
         }
         if (this._fsync) {
-          fs8.fsyncSync(this.fd);
+          fs9.fsyncSync(this.fd);
         }
         const len = this._len;
         if (this._reopening) {
@@ -157046,7 +157046,7 @@ var require_sonic_boom = __commonJS({
       const onDrain = () => {
         if (!this._fsync) {
           try {
-            fs8.fsync(this.fd, (err2) => {
+            fs9.fsync(this.fd, (err2) => {
               this._flushPending = false;
               cb(err2);
             });
@@ -157148,7 +157148,7 @@ var require_sonic_boom = __commonJS({
       const fd = this.fd;
       this.once("ready", () => {
         if (fd !== this.fd) {
-          fs8.close(fd, (err2) => {
+          fs9.close(fd, (err2) => {
             if (err2) {
               return this.emit("error", err2);
             }
@@ -157197,7 +157197,7 @@ var require_sonic_boom = __commonJS({
           buf = this._bufs[0];
         }
         try {
-          const n = Buffer.isBuffer(buf) ? fs8.writeSync(this.fd, buf) : fs8.writeSync(this.fd, buf, "utf8");
+          const n = Buffer.isBuffer(buf) ? fs9.writeSync(this.fd, buf) : fs9.writeSync(this.fd, buf, "utf8");
           const releasedBufObj = releaseWritingBuf(buf, this._len, n);
           buf = releasedBufObj.writingBuf;
           this._len = releasedBufObj.len;
@@ -157213,7 +157213,7 @@ var require_sonic_boom = __commonJS({
         }
       }
       try {
-        fs8.fsyncSync(this.fd);
+        fs9.fsyncSync(this.fd);
       } catch {
       }
     }
@@ -157234,7 +157234,7 @@ var require_sonic_boom = __commonJS({
           buf = mergeBuf(this._bufs[0], this._lens[0]);
         }
         try {
-          const n = fs8.writeSync(this.fd, buf);
+          const n = fs9.writeSync(this.fd, buf);
           buf = buf.subarray(n);
           this._len = Math.max(this._len - n, 0);
           if (buf.length <= 0) {
@@ -157262,13 +157262,13 @@ var require_sonic_boom = __commonJS({
       this._writingBuf = this._writingBuf.length ? this._writingBuf : this._bufs.shift() || "";
       if (this.sync) {
         try {
-          const written = Buffer.isBuffer(this._writingBuf) ? fs8.writeSync(this.fd, this._writingBuf) : fs8.writeSync(this.fd, this._writingBuf, "utf8");
+          const written = Buffer.isBuffer(this._writingBuf) ? fs9.writeSync(this.fd, this._writingBuf) : fs9.writeSync(this.fd, this._writingBuf, "utf8");
           release2(null, written);
         } catch (err2) {
           release2(err2);
         }
       } else {
-        fs8.write(this.fd, this._writingBuf, release2);
+        fs9.write(this.fd, this._writingBuf, release2);
       }
     }
     function actualWriteBuffer() {
@@ -157277,7 +157277,7 @@ var require_sonic_boom = __commonJS({
       this._writingBuf = this._writingBuf.length ? this._writingBuf : mergeBuf(this._bufs.shift(), this._lens.shift());
       if (this.sync) {
         try {
-          const written = fs8.writeSync(this.fd, this._writingBuf);
+          const written = fs9.writeSync(this.fd, this._writingBuf);
           release2(null, written);
         } catch (err2) {
           release2(err2);
@@ -157286,7 +157286,7 @@ var require_sonic_boom = __commonJS({
         if (kCopyBuffer) {
           this._writingBuf = Buffer.from(this._writingBuf);
         }
-        fs8.write(this.fd, this._writingBuf, release2);
+        fs9.write(this.fd, this._writingBuf, release2);
       }
     }
     function actualClose(sonic) {
@@ -157302,12 +157302,12 @@ var require_sonic_boom = __commonJS({
       sonic._lens = [];
       assert2(typeof sonic.fd === "number", `sonic.fd must be a number, got ${typeof sonic.fd}`);
       try {
-        fs8.fsync(sonic.fd, closeWrapped);
+        fs9.fsync(sonic.fd, closeWrapped);
       } catch {
       }
       function closeWrapped() {
         if (sonic.fd !== 1 && sonic.fd !== 2) {
-          fs8.close(sonic.fd, done);
+          fs9.close(sonic.fd, done);
         } else {
           done();
         }
@@ -160023,7 +160023,7 @@ var init_Defaults = __esm({
 
 // node_modules/@whiskeysockets/baileys/lib/Utils/business.js
 import { createHash as createHash5 } from "crypto";
-import { createWriteStream as createWriteStream2, promises as fs5 } from "fs";
+import { createWriteStream as createWriteStream2, promises as fs6 } from "fs";
 import { tmpdir as tmpdir2 } from "os";
 import { join as join3 } from "path";
 async function uploadingNecessaryImagesOfProduct(product, waUploadToServer, timeoutMs = 3e4) {
@@ -160227,7 +160227,7 @@ var init_business = __esm({
           fileEncSha256B64: sha,
           timeoutMs
         });
-        await fs5.unlink(filePath).catch((err2) => console.log("Error deleting temp file ", err2));
+        await fs6.unlink(filePath).catch((err2) => console.log("Error deleting temp file ", err2));
         return { url: getUrlFromDirectPath(directPath) };
       }));
       return results;
@@ -186805,10 +186805,10 @@ var require_segments = __commonJS({
       const segs = getSegmentsFromString(data, Utils.isKanjiModeEnabled());
       const nodes = buildNodes(segs);
       const graph = buildGraph(nodes, version3);
-      const path5 = dijkstra.find_path(graph.map, "start", "end");
+      const path6 = dijkstra.find_path(graph.map, "start", "end");
       const optimizedSegs = [];
-      for (let i = 1; i < path5.length - 1; i++) {
-        optimizedSegs.push(graph.table[path5[i]].node);
+      for (let i = 1; i < path6.length - 1; i++) {
+        optimizedSegs.push(graph.table[path6[i]].node);
       }
       return exports.fromArray(mergeSegments(optimizedSegs));
     };
@@ -189244,7 +189244,7 @@ var require_utils4 = __commonJS({
 // node_modules/qrcode/lib/renderer/png.js
 var require_png2 = __commonJS({
   "node_modules/qrcode/lib/renderer/png.js"(exports) {
-    var fs8 = __require("fs");
+    var fs9 = __require("fs");
     var PNG = require_png().PNG;
     var Utils = require_utils4();
     exports.render = function render(qrData, options) {
@@ -189285,7 +189285,7 @@ var require_png2 = __commonJS({
       });
       png.pack();
     };
-    exports.renderToFile = function renderToFile(path5, qrData, options, cb) {
+    exports.renderToFile = function renderToFile(path6, qrData, options, cb) {
       if (typeof cb === "undefined") {
         cb = options;
         options = void 0;
@@ -189296,7 +189296,7 @@ var require_png2 = __commonJS({
         called = true;
         cb.apply(null, args);
       };
-      const stream4 = fs8.createWriteStream(path5);
+      const stream4 = fs9.createWriteStream(path6);
       stream4.on("error", done);
       stream4.on("close", done);
       exports.renderToFileStream(stream4, qrData, options);
@@ -189358,14 +189358,14 @@ var require_utf82 = __commonJS({
       }
       return output;
     };
-    exports.renderToFile = function renderToFile(path5, qrData, options, cb) {
+    exports.renderToFile = function renderToFile(path6, qrData, options, cb) {
       if (typeof cb === "undefined") {
         cb = options;
         options = void 0;
       }
-      const fs8 = __require("fs");
+      const fs9 = __require("fs");
       const utf8 = exports.render(qrData, options);
-      fs8.writeFile(path5, utf8, cb);
+      fs9.writeFile(path6, utf8, cb);
     };
   }
 });
@@ -189486,7 +189486,7 @@ var require_svg_tag = __commonJS({
       return str;
     }
     function qrToPath(data, size, margin) {
-      let path5 = "";
+      let path6 = "";
       let moveBy = 0;
       let newRow = false;
       let lineLength = 0;
@@ -189497,19 +189497,19 @@ var require_svg_tag = __commonJS({
         if (data[i]) {
           lineLength++;
           if (!(i > 0 && col > 0 && data[i - 1])) {
-            path5 += newRow ? svgCmd("M", col + margin, 0.5 + row + margin) : svgCmd("m", moveBy, 0);
+            path6 += newRow ? svgCmd("M", col + margin, 0.5 + row + margin) : svgCmd("m", moveBy, 0);
             moveBy = 0;
             newRow = false;
           }
           if (!(col + 1 < size && data[i + 1])) {
-            path5 += svgCmd("h", lineLength);
+            path6 += svgCmd("h", lineLength);
             lineLength = 0;
           }
         } else {
           moveBy++;
         }
       }
-      return path5;
+      return path6;
     }
     exports.render = function render(qrData, options, cb) {
       const opts = Utils.getOptions(options);
@@ -189517,10 +189517,10 @@ var require_svg_tag = __commonJS({
       const data = qrData.modules.data;
       const qrcodesize = size + opts.margin * 2;
       const bg = !opts.color.light.a ? "" : "<path " + getColorAttrib(opts.color.light, "fill") + ' d="M0 0h' + qrcodesize + "v" + qrcodesize + 'H0z"/>';
-      const path5 = "<path " + getColorAttrib(opts.color.dark, "stroke") + ' d="' + qrToPath(data, size, opts.margin) + '"/>';
+      const path6 = "<path " + getColorAttrib(opts.color.dark, "stroke") + ' d="' + qrToPath(data, size, opts.margin) + '"/>';
       const viewBox = 'viewBox="0 0 ' + qrcodesize + " " + qrcodesize + '"';
       const width = !opts.width ? "" : 'width="' + opts.width + '" height="' + opts.width + '" ';
-      const svgTag = '<svg xmlns="http://www.w3.org/2000/svg" ' + width + viewBox + ' shape-rendering="crispEdges">' + bg + path5 + "</svg>\n";
+      const svgTag = '<svg xmlns="http://www.w3.org/2000/svg" ' + width + viewBox + ' shape-rendering="crispEdges">' + bg + path6 + "</svg>\n";
       if (typeof cb === "function") {
         cb(null, svgTag);
       }
@@ -189534,15 +189534,15 @@ var require_svg = __commonJS({
   "node_modules/qrcode/lib/renderer/svg.js"(exports) {
     var svgTagRenderer = require_svg_tag();
     exports.render = svgTagRenderer.render;
-    exports.renderToFile = function renderToFile(path5, qrData, options, cb) {
+    exports.renderToFile = function renderToFile(path6, qrData, options, cb) {
       if (typeof cb === "undefined") {
         cb = options;
         options = void 0;
       }
-      const fs8 = __require("fs");
+      const fs9 = __require("fs");
       const svgTag = exports.render(qrData, options);
       const xmlStr = '<?xml version="1.0" encoding="utf-8"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">' + svgTag;
-      fs8.writeFile(path5, xmlStr, cb);
+      fs9.writeFile(path6, xmlStr, cb);
     };
   }
 });
@@ -189700,8 +189700,8 @@ var require_server = __commonJS({
         cb
       };
     }
-    function getTypeFromFilename(path5) {
-      return path5.slice((path5.lastIndexOf(".") - 1 >>> 0) + 2).toLowerCase();
+    function getTypeFromFilename(path6) {
+      return path6.slice((path6.lastIndexOf(".") - 1 >>> 0) + 2).toLowerCase();
     }
     function getRendererFromType(type) {
       switch (type) {
@@ -189765,17 +189765,17 @@ var require_server = __commonJS({
       const renderer = getRendererFromType(params.opts.type);
       return render(renderer.renderToBuffer, text, params);
     };
-    exports.toFile = function toFile(path5, text, opts, cb) {
-      if (typeof path5 !== "string" || !(typeof text === "string" || typeof text === "object")) {
+    exports.toFile = function toFile(path6, text, opts, cb) {
+      if (typeof path6 !== "string" || !(typeof text === "string" || typeof text === "object")) {
         throw new Error("Invalid argument");
       }
       if (arguments.length < 3 && !canPromise()) {
         throw new Error("Too few arguments provided");
       }
       const params = checkParams(text, opts, cb);
-      const type = params.opts.type || getTypeFromFilename(path5);
+      const type = params.opts.type || getTypeFromFilename(path6);
       const renderer = getRendererFromType(type);
-      const renderToFile = renderer.renderToFile.bind(null, path5);
+      const renderToFile = renderer.renderToFile.bind(null, path6);
       return render(renderToFile, text, params);
     };
     exports.toFileStream = function toFileStream(stream4, text, opts) {
@@ -190037,10 +190037,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path5) {
-  if (!path5)
+function getElementAtPath(obj, path6) {
+  if (!path6)
     return obj;
-  return path5.reduce((acc, key) => acc?.[key], obj);
+  return path6.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -190449,11 +190449,11 @@ function explicitlyAborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path5, issues) {
+function prefixIssues(path6, issues) {
   return issues.map((iss) => {
     var _a3;
     (_a3 = iss).path ?? (_a3.path = []);
-    iss.path.unshift(path5);
+    iss.path.unshift(path6);
     return iss;
   });
 }
@@ -190600,16 +190600,16 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
 }
 function formatError(error2, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3, path5 = []) => {
+  const processError = (error3, path6 = []) => {
     for (const issue2 of error3.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, [...path5, ...issue2.path]));
+        issue2.errors.map((issues) => processError({ issues }, [...path6, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, [...path5, ...issue2.path]);
+        processError({ issues: issue2.issues }, [...path6, ...issue2.path]);
       } else {
-        const fullpath = [...path5, ...issue2.path];
+        const fullpath = [...path6, ...issue2.path];
         if (fullpath.length === 0) {
           fieldErrors._errors.push(mapper(issue2));
         } else {
@@ -198423,8 +198423,8 @@ var ProviderRegistry = class {
 };
 
 // src/comms/whatsapp.js
-import fs6 from "node:fs/promises";
-import path4 from "node:path";
+import fs7 from "node:fs/promises";
+import path5 from "node:path";
 
 // src/comms/normalize.js
 function unwrap(message) {
@@ -198559,11 +198559,31 @@ function commsConfigPath(projectDir) {
 function commsLocalConfigPath(projectDir) {
   return path.join(commsDir(projectDir), "config.local.json");
 }
+function commsStatePath(projectDir) {
+  return path.join(commsDir(projectDir), "state.json");
+}
+function commsSeenPath(projectDir) {
+  return path.join(commsDir(projectDir), ".last-session-seen.json");
+}
 function commsAuthDir(projectDir, provider, accountId) {
   return path.join(commsDir(projectDir), provider, accountId, "auth");
 }
+function assertSafeChatSegment(chatId) {
+  if (typeof chatId !== "string" || chatId.length === 0) {
+    throw new Error(`commsChatDir: invalid chatId: ${JSON.stringify(chatId)}`);
+  }
+  if (chatId.includes("/") || chatId.includes("\\") || chatId.includes("..")) {
+    throw new Error(`commsChatDir: unsafe chatId (path traversal): ${JSON.stringify(chatId)}`);
+  }
+}
 function commsChatDir(projectDir, provider, accountId, chatId) {
-  return path.join(commsDir(projectDir), "store", provider, accountId, chatId);
+  assertSafeChatSegment(chatId);
+  const storeRoot = path.join(commsDir(projectDir), "store", provider, accountId);
+  const result = path.join(storeRoot, chatId);
+  if (path.resolve(result) !== path.join(path.resolve(storeRoot), chatId)) {
+    throw new Error(`commsChatDir: resolved path escapes store root: ${result}`);
+  }
+  return result;
 }
 function commsMessagesPath(projectDir, provider, accountId, chatId) {
   return path.join(commsChatDir(projectDir, provider, accountId, chatId), "messages.jsonl");
@@ -198681,6 +198701,28 @@ function readAllMessages(projectDir, provider, accountId, chatId) {
     }
   }).filter(Boolean);
 }
+function updateChatMeta(projectDir, msg) {
+  const { provider, accountId, chatId } = msg;
+  const file = commsMetaPath(projectDir, provider, accountId, chatId);
+  const prev = (() => {
+    if (!fs.existsSync(file)) return {};
+    try {
+      const v = JSON.parse(fs.readFileSync(file, "utf8"));
+      return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+    } catch {
+      return {};
+    }
+  })();
+  const chatKind = String(chatId).endsWith("@g.us") ? "group" : "dm";
+  let name = prev.name ?? null;
+  if (chatKind === "dm" && !msg.fromMe && !name) {
+    const sn = (msg.senderName || "").trim();
+    if (sn) name = sn;
+  }
+  const next = { ...prev, chatKind, name };
+  if (prev.chatKind === next.chatKind && (prev.name ?? null) === (next.name ?? null) && fs.existsSync(file)) return;
+  atomicWrite(file, JSON.stringify(next, null, 2) + "\n");
+}
 function appendMessage(projectDir, msg) {
   const { provider, accountId, chatId } = msg;
   const fp = msg.fingerprint || fingerprint(msg);
@@ -198718,6 +198760,7 @@ function appendMessage(projectDir, msg) {
       oldestTs: oldest2.ts || 0,
       count: allReplaced.length
     });
+    updateChatMeta(projectDir, record3);
     return { appended: true };
   }
   for (const e of existing) {
@@ -198749,6 +198792,7 @@ function appendMessage(projectDir, msg) {
     oldestTs: oldest.ts || 0,
     count: all3.length
   });
+  updateChatMeta(projectDir, record2);
   return { appended: true };
 }
 var DEFAULT_LIMIT = 20;
@@ -198894,6 +198938,44 @@ function writeConfig(projectDir, cfg) {
   return dest;
 }
 
+// ../plugins/continuum/lib/comms_state.js
+import fs3 from "node:fs";
+import path4 from "node:path";
+function readJsonSafe(file, fallback) {
+  try {
+    if (!fs3.existsSync(file)) return fallback;
+    const v = JSON.parse(fs3.readFileSync(file, "utf8"));
+    return v && typeof v === "object" && !Array.isArray(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function writeJsonAtomic(dir, file, obj) {
+  fs3.mkdirSync(dir, { recursive: true });
+  const tmp = path4.join(dir, `.${path4.basename(file)}.tmp-${process.pid}`);
+  fs3.writeFileSync(tmp, JSON.stringify(obj, null, 2) + "\n");
+  fs3.renameSync(tmp, file);
+}
+function readState(projectDir) {
+  return readJsonSafe(commsStatePath(projectDir), {});
+}
+function readSeen(projectDir) {
+  return readJsonSafe(commsSeenPath(projectDir), {});
+}
+function setAccountStatus(projectDir, provider, accountId, status) {
+  const state = readState(projectDir);
+  if (!state[provider]) state[provider] = {};
+  state[provider][accountId] = { status, updatedAt: Math.floor(Date.now() / 1e3) };
+  writeJsonAtomic(commsDir(projectDir), commsStatePath(projectDir), state);
+  return state;
+}
+function setSeen(projectDir, provider, accountId, chatId, newestTs) {
+  const seen = readSeen(projectDir);
+  seen[`${provider}/${accountId}/${chatId}`] = newestTs;
+  writeJsonAtomic(commsDir(projectDir), commsSeenPath(projectDir), seen);
+  return seen;
+}
+
 // src/comms/whatsapp.js
 function consoleLogger({ level = "warn", write: write2 } = {}) {
   const out = write2 || ((s) => process.stderr.write(s + "\n"));
@@ -198926,11 +199008,11 @@ function consoleLogger({ level = "warn", write: write2 } = {}) {
   return logger;
 }
 function lockPath(authDir) {
-  return path4.join(authDir, ".lock");
+  return path5.join(authDir, ".lock");
 }
 async function readLock(authDir) {
   try {
-    const raw = await fs6.readFile(lockPath(authDir), "utf8");
+    const raw = await fs7.readFile(lockPath(authDir), "utf8");
     return JSON.parse(raw);
   } catch {
     return null;
@@ -198940,7 +199022,7 @@ async function releaseLock(authDir) {
   const lk = await readLock(authDir);
   if (lk && lk.pid === process.pid) {
     try {
-      await fs6.rm(lockPath(authDir), { force: true });
+      await fs7.rm(lockPath(authDir), { force: true });
     } catch {
     }
   }
@@ -198978,6 +199060,26 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
   status(accountId) {
     return this.statuses.get(accountId) || "logged_out";
   }
+  // _persistStatus: mirror an in-memory status transition into state.json so the
+  // fs-only init-gate (session_start.js statusOf()) reflects the REAL account
+  // status instead of defaulting every account to "needs_login" forever. Uses the
+  // account's bound projectDir (§3.1 — never cwd). Best-effort: a write failure
+  // must never break the live socket / connection lifecycle, so it is swallowed.
+  _persistStatus(accountId, status) {
+    this.statuses.set(accountId, status);
+    let projectDir;
+    try {
+      projectDir = this.projectDirFor(accountId);
+    } catch {
+      projectDir = null;
+    }
+    if (!projectDir) return;
+    try {
+      setAccountStatus(projectDir, "whatsapp", accountId, status);
+    } catch (e) {
+      this.logger.warn("setAccountStatus failed", String(e));
+    }
+  }
   onMessage(cb) {
     this.listeners.push(cb);
   }
@@ -198991,7 +199093,7 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
     const factory2 = makeSocket2 || ((deps) => this._realMakeSocket(accountId, authDir, deps));
     const sock = await factory2({ authDir, accountId });
     this.sockets.set(accountId, sock);
-    this.statuses.set(accountId, "connected");
+    this._persistStatus(accountId, "connected");
     this._wireCapture(accountId, sock, projectDir);
     this._wireHistory(accountId, sock, projectDir);
     this._wireConnection(accountId, sock, projectDir, factory2);
@@ -199070,14 +199172,14 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
     sock.ev.on("connection.update", async (update) => {
       if (update.connection === "open") {
         this._reconnects.set(accountId, 0);
-        this.statuses.set(accountId, "connected");
+        this._persistStatus(accountId, "connected");
         return;
       }
       if (update.connection === "close") {
         if (this.sockets.get(accountId) !== sock) return;
         const code = this._statusCode(update);
         if (code === 401) {
-          this.statuses.set(accountId, "logged_out");
+          this._persistStatus(accountId, "logged_out");
           try {
             await this._wipeAuth(accountId);
           } catch {
@@ -199085,10 +199187,10 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
           return;
         }
         if (_WhatsAppProvider._NO_RECONNECT_CODES.has(code)) {
-          this.statuses.set(accountId, "logged_out");
+          this._persistStatus(accountId, "logged_out");
           return;
         }
-        this.statuses.set(accountId, "needs_login");
+        this._persistStatus(accountId, "needs_login");
         const attempts = (this._reconnects.get(accountId) || 0) + 1;
         this._reconnects.set(accountId, attempts);
         if (attempts > _WhatsAppProvider._MAX_RECONNECTS) {
@@ -199110,7 +199212,7 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
   }
   async _wipeAuth(accountId) {
     const dir = this.getSessionDir(accountId);
-    await fs6.rm(dir, { recursive: true, force: true });
+    await fs7.rm(dir, { recursive: true, force: true });
   }
   // ---- CommsProvider read/admin surface (comms-setup step 4, comms-recall) ----
   // listGroups: enumerate the groups this account participates in, live from the
@@ -199185,6 +199287,11 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
     } catch {
     }
     await this._wipeAuth(accountId);
+    try {
+      const projectDir = this.projectDirFor(accountId);
+      if (projectDir) setAccountStatus(projectDir, "whatsapp", accountId, "logged_out");
+    } catch {
+    }
   }
   // link: open a socket (if needed) and resolve to QR or pairing code.
   // opts: { phone? }. deps: { makeSocket?, qrToDataUrl? } (injectable for tests).
@@ -199193,6 +199300,7 @@ var WhatsAppProvider = class _WhatsAppProvider extends CommsProvider {
     const makeSocket2 = deps.makeSocket || ((d) => this._realMakeSocket(accountId, this.getSessionDir(accountId), d));
     const qrToDataUrl = deps.qrToDataUrl || (async (s) => this._qrToDataUrl(s));
     const sock = await this.connect(accountId, { makeSocket: makeSocket2 });
+    this._persistStatus(accountId, "needs_login");
     if (opts.phone) {
       const code = await sock.requestPairingCode(String(opts.phone).replace(/[^0-9]/g, ""));
       return { method: "pairing", payload: { code } };
@@ -199380,7 +199488,7 @@ function commsRecall(projectDir, opts = {}) {
 }
 
 // ../plugins/continuum/lib/comms_import.js
-import fs7 from "node:fs";
+import fs8 from "node:fs";
 import crypto4 from "node:crypto";
 function sha12(s) {
   return crypto4.createHash("sha1").update(s).digest("hex");
@@ -199439,7 +199547,7 @@ function classifyBody(body) {
   return { kind: "text", text: body };
 }
 function parseWhatsAppExport(filePath, { provider, accountId, chatId, tzMinutes } = {}) {
-  const content = fs7.readFileSync(filePath, "utf8");
+  const content = fs8.readFileSync(filePath, "utf8");
   const lines = content.replace(/\r\n/g, "\n").split("\n");
   const out = [];
   let cur = null;
@@ -199563,6 +199671,29 @@ function ok(obj) {
 function err(msg) {
   return { content: [{ type: "text", text: msg }], isError: true };
 }
+function setSeenMax(projectDir, provider, accountId, chatId, ts) {
+  if (!chatId || !Number.isFinite(Number(ts))) return;
+  const key = `${provider}/${accountId}/${chatId}`;
+  let prev = 0;
+  try {
+    prev = Number(readSeen(projectDir)[key]) || 0;
+  } catch {
+  }
+  const next = Number(ts);
+  if (next <= prev) return;
+  try {
+    setSeen(projectDir, provider, accountId, chatId, next);
+  } catch {
+  }
+}
+function advanceSeen(projectDir, provider, accountId, chatId, messages) {
+  let newest = 0;
+  for (const m of messages || []) {
+    const t = Number(m && m.ts) || 0;
+    if (t > newest) newest = t;
+  }
+  if (newest > 0) setSeenMax(projectDir, provider, accountId, chatId, newest);
+}
 function buildServer({ registry: registry2, env = process.env } = {}) {
   const reg = registry2 || (() => {
     const r = new ProviderRegistry();
@@ -199596,11 +199727,20 @@ function buildServer({ registry: registry2, env = process.env } = {}) {
       switch (name) {
         case "comms_account_status": {
           const p = providerFor(args.provider, projectDir);
-          return ok({ status: p.status(args.accountId) });
+          const status = p.status(args.accountId);
+          try {
+            setAccountStatus(projectDir, args.provider, args.accountId, status);
+          } catch {
+          }
+          return ok({ status });
         }
         case "comms_link_account": {
           const p = providerFor(args.provider, projectDir);
           const res = await p.link(args.accountId, { phone: args.phone });
+          try {
+            setAccountStatus(projectDir, args.provider, args.accountId, p.status(args.accountId));
+          } catch {
+          }
           return ok(res);
         }
         case "comms_unlink_account": {
@@ -199630,25 +199770,38 @@ function buildServer({ registry: registry2, env = process.env } = {}) {
           return ok({ allowed_jids: acc.allowed_jids });
         }
         case "comms_get_messages": {
+          const chatId = normalizeJid(args.chatId);
+          const cfg = readConfig(projectDir);
+          if (!isAllowed(cfg, args.provider, args.accountId, chatId)) {
+            return err(`comms_get_messages: ${args.provider}/${args.accountId} chat not on allowlist: ${chatId || "(empty jid)"}`);
+          }
           const slice = getSlice(projectDir, {
             provider: args.provider,
             accountId: args.accountId,
-            chatId: args.chatId,
+            chatId,
             limit: args.limit,
             anchor: args.anchor,
             before: args.before,
             after: args.after,
             continuation: args.continuation
           });
+          advanceSeen(projectDir, args.provider, args.accountId, chatId, slice.messages);
           return ok(slice);
         }
         case "comms_sync_now": {
           const p = providerFor(args.provider, projectDir);
-          await p.connect?.(args.accountId, {});
-          return ok({ status: p.status(args.accountId) });
+          if (p.status(args.accountId) !== "connected") {
+            await p.connect?.(args.accountId, {});
+          }
+          const status = p.status(args.accountId);
+          try {
+            setAccountStatus(projectDir, args.provider, args.accountId, status);
+          } catch {
+          }
+          return ok({ status });
         }
         case "comms_recall": {
-          return ok(commsRecall(projectDir, {
+          const recall = commsRecall(projectDir, {
             query: args.query,
             provider: args.provider,
             accountId: args.accountId,
@@ -199656,7 +199809,14 @@ function buildServer({ registry: registry2, env = process.env } = {}) {
             since: args.since,
             until: args.until,
             limit: args.limit
-          }));
+          });
+          for (const h of recall.hits || []) {
+            try {
+              setSeenMax(projectDir, h.provider, h.accountId, h.chatId, h.ts);
+            } catch {
+            }
+          }
+          return ok(recall);
         }
         case "comms_import_history": {
           const chatId = normalizeJid(args.chatId);
