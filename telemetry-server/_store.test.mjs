@@ -65,6 +65,29 @@ test("sweepRetention drops iid after the dedup window (keeps aggregate fields)",
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("sweepRetention KEEPS iid for events inside the dedup window", () => {
+  const dir = tmp();
+  const nowSec = Math.floor(Date.now() / 1000);
+  const recentTs = nowSec - 60 * 60 * 24 * 2;   // 2 days ago — within default 7-day window
+  const oldTs    = nowSec - 60 * 60 * 24 * 30;  // 30 days ago — outside window
+  const recentDay = dayBucket(recentTs);
+  const oldDay    = dayBucket(oldTs);
+  appendEvents(dir, [
+    { ts: recentTs, iid: "i-fresh", tool: "Read",  mcp: "", ok: true },
+    { ts: oldTs,    iid: "i-stale", tool: "Write", mcp: "", ok: true },
+  ]);
+  sweepRetention(dir, 180, Date.now(), { dedupWindowDays: 7 });
+  // Recent event: iid must still be present
+  const recentLines = fs.readFileSync(eventsPath(dir, recentDay), "utf8").split("\n").filter(Boolean);
+  const recentEv = JSON.parse(recentLines[0]);
+  assert.equal(recentEv.iid, "i-fresh", "iid preserved for recent event inside dedup window");
+  // Old event: iid must have been stripped
+  const oldLines = fs.readFileSync(eventsPath(dir, oldDay), "utf8").split("\n").filter(Boolean);
+  const oldEv = JSON.parse(oldLines[0]);
+  assert.ok(!("iid" in oldEv) || oldEv.iid === "", "iid dropped for old event outside dedup window");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("eraseIid removes every stored event for an iid (GDPR erasure), returns count", () => {
   const dir = tmp();
   appendEvents(dir, [
