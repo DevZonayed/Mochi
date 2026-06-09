@@ -15,7 +15,7 @@ import { telemetryConfigPath, telemetryDir } from "./paths.js";
 // Baked-in transport consts (spec §13.8). INGEST_WRITE_KEY is a SOFT deterrent,
 // not a secret (it ships in distributed plugin code) — set at build/release.
 export const INGEST_URL = "https://mochi-insight.nexalance.cloud/v1/ingest";
-export const INGEST_WRITE_KEY = "REPLACE_AT_BUILD"; // placeholder; baked at release
+export const INGEST_WRITE_KEY = "mik_9326238fb8256e3f071cca7db8d057bd3788"; // soft deterrent (rate-limited, content-free-only); not a secret
 
 const DEFAULTS = {
   decided: false,    // has the user answered the consent gate at least once?
