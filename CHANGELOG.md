@@ -8,6 +8,29 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.1] — 2026-06-09
+
+### Changed (Comment Mode UX, from user feedback)
+
+- **Sticky pick mode** — arm once (💬), then for each comment just **click an
+  element → type → Enter**. The picker stays armed (no re-clicking the bubble);
+  **Esc** (when nothing's open) or tapping 💬 finishes. Far fewer clicks.
+- **Easy cancel** — **Enter** saves (Shift+Enter = newline), **Esc** or
+  **clicking outside** the popover discards it; placeholder documents it.
+- The picker no longer swallows clicks on Mochi's own FAB / ⋯ menu while armed
+  (you can open the menu and finish without disarming first).
+
+### Fixed (Comment Mode)
+
+- **Responsive frame:** the hover highlight was rendered *behind* the device
+  overlay (so it looked like nothing happened) — raised above it; the frame now
+  **auto-arms** commenting on load, "Comment here" is a clear armed toggle, and
+  switching devices re-arms with the correct breakpoint.
+- **Top-frame guard:** the content script never mounts inside iframes (including
+  the responsive preview), preventing nested instances.
+
+---
+
 ## [0.7.0] — 2026-06-07
 
 ### Added
