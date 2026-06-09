@@ -12,9 +12,17 @@ import {
   readStateMd,
   readConfig,
   estimateTokens,
+  commsCursorPath,
 } from "../lib/paths.js";
 import { readSentinel } from "../lib/archive.js";
 import { register as brokerRegister } from "../lib/broker.js";
+import { readConfig as readCommsConfig } from "../lib/comms_config.js";
+import {
+  readState as readCommsState,
+  readSeen as readCommsSeen,
+  accountStatuses,
+} from "../lib/comms_state.js";
+import { normalizeJid } from "../lib/comms_allowlist.js";
 
 // Resolve the directory that holds the continuum plugin's lib/ — works
 // regardless of whether continuum is bundled inside super-tester or loaded
@@ -55,14 +63,20 @@ async function readStdin() {
   });
 }
 
-function emitContext(text) {
-  const out = {
+// Build (do NOT emit) the SessionStart additionalContext payload, so callers
+// can accumulate context and emit exactly once. emitContextOnce() is the single
+// terminal writer used at the end of main() (B3 fix — no early emit+exit).
+function buildContextOutput(text) {
+  return {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
       additionalContext: text,
     },
   };
-  process.stdout.write(JSON.stringify(out));
+}
+
+function emitContextOnce(text) {
+  process.stdout.write(JSON.stringify(buildContextOutput(text)));
   process.exit(0);
 }
 
@@ -173,6 +187,138 @@ function computeDefaultSessionName(projectDir) {
   }
 }
 
+// Comms init / onboarding / freshness gate (spec §8). fs-only — the hook can't
+// call MCP tools, so all state comes from files the comms MCP writes:
+// comms/config.json (+ config.local.json), state.json, .last-session-seen.json.
+// Returns a string to APPEND to the single context accumulator ("" = silent).
+function commsGate(projectDir, source) {
+  let out = "";
+  let cfg;
+  try {
+    cfg = readCommsConfig(projectDir);
+  } catch {
+    return ""; // never let the comms gate break SessionStart
+  }
+
+  // 1) Undecided → ASK, but only on a real init (startup/clear). Staying silent
+  //    on resume/compact avoids re-nagging after a verbal "yes" that hasn't been
+  //    written to config yet.
+  if (!cfg.decided) {
+    if (source === "startup" || source === "clear") {
+      out +=
+        "\n\n---\n\n" +
+        "[continuum:comms] This repo hasn't decided about communication-channel sync. " +
+        'Ask the user, once: *"Do you want this repo to sync a communication channel ' +
+        '(e.g. WhatsApp) so I can recall its messages? (yes/no)"* — On **no**, immediately ' +
+        "write `.continuum/comms/config.json` = `{\"version\":1,\"decided\":true,\"declined\":true}` " +
+        "so I never ask again. On **yes**, immediately write " +
+        "`{\"version\":1,\"decided\":true,\"declined\":false}` (no provider yet) **before** anything " +
+        "else, then run `/mochi:comms-setup`. Always write the answer to config the moment it's given.";
+    }
+    return out; // undecided: nothing else to say
+  }
+
+  // 2) Declined → silent forever.
+  if (cfg.declined) return out;
+
+  // 3) Decided + enabled: gather configured accounts and their link status.
+  let state = {};
+  try {
+    state = readCommsState(projectDir);
+  } catch {}
+  const statuses = accountStatuses(state); // [{provider, accountId, status, ...}]
+
+  // Configured accounts (from config.providers) — the source of truth for "what
+  // SHOULD be linked". An account configured but absent from state.json, or with
+  // a non-connected status, needs onboarding.
+  const configured = [];
+  const providers = cfg.providers || {};
+  for (const provider of Object.keys(providers)) {
+    const accounts = (providers[provider] || {}).accounts || {};
+    for (const accountId of Object.keys(accounts)) {
+      configured.push({ provider, accountId });
+    }
+  }
+
+  const statusOf = (provider, accountId) => {
+    const hit = statuses.find(
+      (s) => s.provider === provider && s.accountId === accountId
+    );
+    return hit ? hit.status : "needs_login";
+  };
+
+  const needsLogin = configured.filter(
+    (c) => statusOf(c.provider, c.accountId) !== "connected"
+  );
+
+  // If the user said yes but never finished setup (no providers configured), or
+  // a configured account isn't connected, point them at onboarding.
+  if (configured.length === 0 || needsLogin.length > 0) {
+    out +=
+      "\n\n---\n\n" +
+      "[continuum:comms] Channel sync is enabled for this repo but " +
+      (configured.length === 0
+        ? "no provider is linked yet. "
+        : `${needsLogin.length} account(s) need login (` +
+          needsLogin.map((c) => `${c.provider}/${c.accountId}`).join(", ") +
+          "). ") +
+      "Run `/mochi:comms-setup` to finish linking.";
+    return out;
+  }
+
+  // 4) Decided + all connected → freshness note (best-effort). Diff each
+  //    allowlisted chat's cursor.newestTs against the watermark.
+  let seen = {};
+  try {
+    seen = readCommsSeen(projectDir);
+  } catch {}
+
+  let totalNew = 0;
+  const freshChats = [];
+  for (const provider of Object.keys(providers)) {
+    const accounts = (providers[provider] || {}).accounts || {};
+    for (const accountId of Object.keys(accounts)) {
+      const allowed = accounts[accountId].allowed_jids || [];
+      for (const rawChatId of allowed) {
+        // The capture pipeline (whatsapp.js _capture) LID/device-normalizes a
+        // chatId BEFORE write, so the store/cursor and setSeen's watermark are
+        // BOTH keyed under the NORMALIZED jid (e.g. "12345:6@s.whatsapp.net" ->
+        // "12345@s.whatsapp.net"). The allowlist may carry the raw, device-
+        // suffixed jid, so normalize here too — otherwise the cursor.json lookup
+        // and the seen-watermark key both miss and a chat with real new activity
+        // never surfaces a freshness note (M4).
+        const chatId = normalizeJid(rawChatId);
+        if (!chatId) continue;
+        let newestTs = null;
+        try {
+          const cur = JSON.parse(
+            fs.readFileSync(
+              commsCursorPath(projectDir, provider, accountId, chatId),
+              "utf8"
+            )
+          );
+          newestTs = typeof cur.newestTs === "number" ? cur.newestTs : null;
+        } catch {}
+        if (newestTs == null) continue;
+        const watermark = seen[`${provider}/${accountId}/${chatId}`] ?? 0;
+        if (newestTs > watermark) {
+          totalNew += 1;
+          freshChats.push(`${provider}/${accountId}/${chatId}`);
+        }
+      }
+    }
+  }
+
+  if (freshChats.length > 0) {
+    out +=
+      "\n\n---\n\n" +
+      `[continuum:comms] You have new message activity since you last looked in ${freshChats.length} ` +
+      `chat(s): ${freshChats.join(", ")}. Use \`/mochi:comms-recall\` or \`/mochi:comms-status\` to review.`;
+  }
+  // If state.json was absent (degrade) or nothing new, stay silent.
+  return out;
+}
+
 async function main() {
   const stdinRaw = await readStdin();
   let payload = {};
@@ -189,22 +335,46 @@ async function main() {
     fs.mkdirSync(p.root, { recursive: true });
     if (sessionId) fs.writeFileSync(p.sessionIdFile, sessionId);
     fs.writeFileSync(path.join(p.root, ".plugin-root"), CONTINUUM_ROOT);
-    // Protective .gitignore (idempotent): the verification ledger, provenance,
-    // uploads, runs and screenshots can contain page-derived data (control
-    // labels, response bodies, secrets seeded for testing) and should not be
-    // committed. The chain itself (chain/, STATE.md) is intentionally NOT ignored.
+    // Protective .gitignore (idempotent APPENDER — B2 fix): the verification
+    // ledger, provenance, uploads, runs and screenshots can contain page-derived
+    // data (control labels, response bodies, secrets seeded for testing); the
+    // comms/ tree holds WhatsApp auth creds + private messages. None of it may be
+    // committed. The chain (chain/, STATE.md) and comms/config.json are
+    // intentionally tracked. This MUST append missing lines to an existing
+    // .gitignore (not just create-if-absent), so repos bootstrapped before comms
+    // shipped still gain the comms ignores. Paths are relative to .continuum/.
     const giPath = path.join(p.root, ".gitignore");
-    if (!fs.existsSync(giPath)) {
-      fs.writeFileSync(giPath, [
-        "# Auto-written by continuum. Transient / page-derived data — do not commit.",
-        "# The chain (chain/, STATE.md) is intentionally tracked and NOT ignored.",
-        "verification/",
-        "runs/",
-        "uploads/",
-        "screenshots/",
-        ".env-provenance.json",
-        "",
-      ].join("\n"));
+    const giHeader = [
+      "# Auto-written by continuum. Transient / page-derived data — do not commit.",
+      "# The chain (chain/, STATE.md) and comms/config.json are intentionally tracked.",
+    ];
+    const giWanted = [
+      "verification/",
+      "runs/",
+      "uploads/",
+      "screenshots/",
+      ".env-provenance.json",
+      "comms/*",
+      "!comms/config.json",
+    ];
+    let giExisting = [];
+    try {
+      if (fs.existsSync(giPath)) {
+        giExisting = fs.readFileSync(giPath, "utf8").split("\n");
+      }
+    } catch {}
+    const giHave = new Set(giExisting.map((l) => l.trim()));
+    if (giExisting.length === 0) {
+      // Fresh file: header + all wanted lines + trailing newline.
+      fs.writeFileSync(giPath, [...giHeader, ...giWanted, ""].join("\n"));
+    } else {
+      // Existing file: append only the wanted lines that are missing.
+      const toAdd = giWanted.filter((l) => !giHave.has(l));
+      if (toAdd.length > 0) {
+        const base = fs.readFileSync(giPath, "utf8");
+        const sep = base.endsWith("\n") || base.length === 0 ? "" : "\n";
+        fs.writeFileSync(giPath, base + sep + toAdd.join("\n") + "\n");
+      }
     }
   } catch {}
 
@@ -246,22 +416,30 @@ async function main() {
 
   const cfg = readConfig(projectDir);
 
+  // Accumulate everything into ONE context string, emit exactly once at the end
+  // (B3 fix). The bootstrap branch APPENDS instead of emitting+exiting early, so
+  // the comms gate (below) is reachable even on a fresh repo's first session.
+  let context = "";
+
   if (!isBootstrapped(projectDir)) {
-    emitContext(bootstrapDirective(projectDir));
-    return;
+    context += bootstrapDirective(projectDir);
+  } else {
+    context += buildLoadedContext(projectDir, cfg);
+
+    const sentinel = readSentinel(projectDir);
+    if (sentinel) {
+      const trigger = sentinel.trigger || "?";
+      const why = sentinel.matcher || sentinel.why_session_ended || "?";
+      const archive = sentinel.archive_path || "(no archive recorded)";
+      context += `\n\n---\n\n**⚠ Pending checkpoint detected.** Previous session ended via \`${trigger}\` (${why}). Raw transcript was archived to:\n\n\`${archive}\`\n\nIf the last session changed decisions or surfaced new threads, run \`/continuum:checkpoint\` now — read the archive with \`zcat\` if you need to recover detail. The sentinel clears automatically when a new link is written.`;
+    }
   }
 
-  let context = buildLoadedContext(projectDir, cfg);
+  // Comms init / onboarding / freshness gate (spec §8) is appended here, before
+  // the single emit. (Added in the next task.)
+  context += commsGate(projectDir, payload.source);
 
-  const sentinel = readSentinel(projectDir);
-  if (sentinel) {
-    const trigger = sentinel.trigger || "?";
-    const why = sentinel.matcher || sentinel.why_session_ended || "?";
-    const archive = sentinel.archive_path || "(no archive recorded)";
-    context += `\n\n---\n\n**⚠ Pending checkpoint detected.** Previous session ended via \`${trigger}\` (${why}). Raw transcript was archived to:\n\n\`${archive}\`\n\nIf the last session changed decisions or surfaced new threads, run \`/continuum:checkpoint\` now — read the archive with \`zcat\` if you need to recover detail. The sentinel clears automatically when a new link is written.`;
-  }
-
-  emitContext(context);
+  emitContextOnce(context);
 }
 
 main().catch((err) => {

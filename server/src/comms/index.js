@@ -1,0 +1,264 @@
+#!/usr/bin/env node
+// comms MCP server — bundled to dist/comms.bundle.mjs. Mirrors the browser
+// server's @modelcontextprotocol/sdk + StdioServerTransport usage. Channel-
+// agnostic: dispatches on `provider` via the registry. Project dir is resolved
+// explicitly (env COMMS_PROJECT_DIR -> per-tool project_dir arg), NEVER cwd (§3.1).
+
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+
+import { ProviderRegistry } from "./provider.js";
+import { WhatsAppProvider } from "./whatsapp.js";
+import { getSlice, listChats, readAllMessages, appendMessage } from "../../../plugins/continuum/lib/comms_store.js";
+import { readConfig, writeConfig } from "../../../plugins/continuum/lib/comms_config.js";
+import { normalizeJid, isAllowed } from "../../../plugins/continuum/lib/comms_allowlist.js";
+import { commsRecall } from "../../../plugins/continuum/lib/comms_recall.js";
+import { parseWhatsAppExport } from "../../../plugins/continuum/lib/comms_import.js";
+import { reconcileImport } from "../../../plugins/continuum/lib/comms_dedupe.js";
+import { setAccountStatus, setSeen, readSeen } from "../../../plugins/continuum/lib/comms_state.js";
+
+const log = (...a) => process.stderr.write(a.map(String).join(" ") + "\n");
+
+const PROJ = { type: "string", description: "Project root containing .continuum/. Defaults to COMMS_PROJECT_DIR env." };
+
+const TOOL_DEFS = [
+  { name: "comms_link_account", description: "Start a login for a comms account; returns a QR (data-URL + ASCII) or, if phone is given, an 8-char pairing code (requested once).",
+    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, phone: { type: "string" }, project_dir: PROJ }, required: ["provider", "accountId"] } },
+  { name: "comms_account_status", description: "Report connection status: connected | needs_login | logged_out.",
+    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, project_dir: PROJ }, required: ["provider", "accountId"] } },
+  { name: "comms_unlink_account", description: "Wipe session/auth files for an account.",
+    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, project_dir: PROJ }, required: ["provider", "accountId"] } },
+  { name: "comms_list_chats", description: "Enumerate allowlisted DM/group chats for an account.",
+    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, project_dir: PROJ }, required: ["provider", "accountId"] } },
+  { name: "comms_list_groups", description: "Enumerate group chats visible to the account (pick-time).",
+    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, project_dir: PROJ }, required: ["provider", "accountId"] } },
+  { name: "comms_set_allowlist", description: "Merge JIDs into an account's allowlist and flip decided:true/declined:false.",
+    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, allowed_jids: { type: "array", items: { type: "string" } }, project_dir: PROJ }, required: ["provider", "accountId", "allowed_jids"] } },
+  { name: "comms_get_messages", description: "Return a bounded latest-N or windowed slice of a chat from the store (default 20, hard max 200).",
+    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, chatId: { type: "string" }, limit: { type: "number" }, anchor: { type: "string" }, before: { type: "number" }, after: { type: "number" }, continuation: { type: "string" }, project_dir: PROJ }, required: ["provider", "accountId", "chatId"] } },
+  { name: "comms_recall", description: "Stemmed-token search over the comms store; returns scored snippets with msgId handles (bounded).",
+    inputSchema: { type: "object", properties: { query: { type: "string" }, provider: { type: "string" }, accountId: { type: "string" }, chatId: { type: "string" }, since: { type: "number" }, until: { type: "number" }, limit: { type: "number" }, project_dir: PROJ }, required: ["query"] } },
+  { name: "comms_import_history", description: "Parse a WhatsApp 'Export chat' .txt and reconcile it into the store by fingerprint. Optional tzMinutes aligns the export's local-clock timestamps to UTC (getTimezoneOffset() sign: UTC-5 => 300) so cross-source dedupe collides.",
+    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, chatId: { type: "string" }, filePath: { type: "string" }, tzMinutes: { type: "number" }, project_dir: PROJ }, required: ["provider", "accountId", "chatId", "filePath"] } },
+  { name: "comms_sync_now", description: "Force a connect + best-effort backfill pass for an account.",
+    inputSchema: { type: "object", properties: { provider: { type: "string" }, accountId: { type: "string" }, project_dir: PROJ }, required: ["provider", "accountId"] } },
+];
+
+function ok(obj) { return { content: [{ type: "text", text: JSON.stringify(obj) }], structuredContent: obj, isError: false }; }
+function err(msg) { return { content: [{ type: "text", text: msg }], isError: true }; }
+
+// setSeenMax: advance the per-chat last-session-seen watermark MONOTONICALLY —
+// only move it forward to a newer ts, never backward (a read of an older slice,
+// or a recall hit on an old message, must not un-see newer activity). chatId is
+// expected already-normalized by the caller. Best-effort; swallows write errors.
+function setSeenMax(projectDir, provider, accountId, chatId, ts) {
+  if (!chatId || !Number.isFinite(Number(ts))) return;
+  const key = `${provider}/${accountId}/${chatId}`;
+  let prev = 0;
+  try { prev = Number(readSeen(projectDir)[key]) || 0; } catch {}
+  const next = Number(ts);
+  if (next <= prev) return;
+  try { setSeen(projectDir, provider, accountId, chatId, next); } catch {}
+}
+
+// advanceSeen: bump a chat's watermark to the newest ts among the messages just
+// returned to the caller (a "looked at it" signal for the freshness gate).
+function advanceSeen(projectDir, provider, accountId, chatId, messages) {
+  let newest = 0;
+  for (const m of messages || []) { const t = Number(m && m.ts) || 0; if (t > newest) newest = t; }
+  if (newest > 0) setSeenMax(projectDir, provider, accountId, chatId, newest);
+}
+
+export function buildServer({ registry, env = process.env } = {}) {
+  const reg = registry || (() => { const r = new ProviderRegistry(); r.register("whatsapp", (deps) => new WhatsAppProvider(deps)); return r; })();
+  const acctProject = new Map(); // accountId -> projectDir (§3.1 in-memory map)
+
+  function resolveProjectDir(args = {}) {
+    const dir = args.project_dir || env.COMMS_PROJECT_DIR;
+    if (!dir) throw new Error("project_dir is required (no COMMS_PROJECT_DIR env and no project_dir arg)");
+    return dir;
+  }
+
+  function providerFor(name, projectDir) {
+    return reg.get(name, { projectDirFor: (accountId) => acctProject.get(`${name}:${accountId}`) || projectDir });
+  }
+
+  async function handleToolCall(params) {
+    const name = params?.name;
+    const args = params?.arguments ?? {};
+
+    // Check for unknown tool first (before projectDir resolution) so callers
+    // get a clear "unknown tool" error rather than a misleading projectDir error.
+    const knownTools = new Set(TOOL_DEFS.map((t) => t.name));
+    if (!knownTools.has(name)) {
+      return err(`unknown tool: ${name}`);
+    }
+
+    try {
+      let projectDir;
+      try { projectDir = resolveProjectDir(args); } catch (e) { return err(String(e.message || e)); }
+      if (args.provider && args.accountId) acctProject.set(`${args.provider}:${args.accountId}`, projectDir);
+
+      switch (name) {
+        case "comms_account_status": {
+          const p = providerFor(args.provider, projectDir);
+          const status = p.status(args.accountId);
+          // Belt-and-suspenders: mirror the live status into state.json so the
+          // fs-only init-gate (session_start.js) sees the real value even if the
+          // provider's own transition writer was bypassed for this account.
+          try { setAccountStatus(projectDir, args.provider, args.accountId, status); } catch {}
+          return ok({ status });
+        }
+        case "comms_link_account": {
+          const p = providerFor(args.provider, projectDir);
+          const res = await p.link(args.accountId, { phone: args.phone });
+          // After a link attempt the provider already persisted the pending/open
+          // status; re-mirror the current value as a belt-and-suspenders write.
+          try { setAccountStatus(projectDir, args.provider, args.accountId, p.status(args.accountId)); } catch {}
+          return ok(res);
+        }
+        case "comms_unlink_account": {
+          const p = providerFor(args.provider, projectDir);
+          await p.unlink(args.accountId);
+          return ok({ unlinked: true });
+        }
+        case "comms_list_chats": {
+          const cfg = readConfig(projectDir);
+          const allowed = cfg?.providers?.[args.provider]?.accounts?.[args.accountId]?.allowed_jids || [];
+          return ok({ chats: listChats(projectDir, allowed) });
+        }
+        case "comms_list_groups": {
+          const p = providerFor(args.provider, projectDir);
+          return ok({ groups: await p.listGroups(args.accountId) });
+        }
+        case "comms_set_allowlist": {
+          const cfg = readConfig(projectDir);
+          cfg.decided = true; cfg.declined = false;
+          cfg.providers = cfg.providers || {};
+          const prov = cfg.providers[args.provider] = cfg.providers[args.provider] || { accounts: {} };
+          const acc = prov.accounts[args.accountId] = prov.accounts[args.accountId] || { capture: "session", mode: "strict", allowed_jids: [] };
+          const incoming = (args.allowed_jids || []).map(normalizeJid);
+          acc.allowed_jids = [...new Set([...(acc.allowed_jids || []), ...incoming])];
+          writeConfig(projectDir, cfg);
+          return ok({ allowed_jids: acc.allowed_jids });
+        }
+        case "comms_get_messages": {
+          // §6.4 READ-SIDE allowlist gate (security): list/get/recall only ever
+          // return allowlisted chats. Without this, comms_get_messages would read
+          // any chat by chatId — a read-side bypass of the channel-strict guarantee.
+          // Mirror the comms_recall / comms_import_history guard exactly: normalize
+          // the chatId, then strict-membership check before touching the store.
+          const chatId = normalizeJid(args.chatId);
+          const cfg = readConfig(projectDir);
+          if (!isAllowed(cfg, args.provider, args.accountId, chatId)) {
+            return err(`comms_get_messages: ${args.provider}/${args.accountId} chat not on allowlist: ${chatId || "(empty jid)"}`);
+          }
+          const slice = getSlice(projectDir, { provider: args.provider, accountId: args.accountId, chatId,
+            limit: args.limit, anchor: args.anchor, before: args.before, after: args.after, continuation: args.continuation });
+          // Advance the last-session-seen watermark for this chat to the newest ts
+          // actually read, so the session_start.js freshness gate stops re-flagging
+          // messages the agent has already looked at. Never regress the watermark.
+          advanceSeen(projectDir, args.provider, args.accountId, chatId, slice.messages);
+          return ok(slice);
+        }
+        case "comms_sync_now": {
+          const p = providerFor(args.provider, projectDir);
+          // Double-wire guard: connect() opens a NEW socket and (re-)wires the
+          // messages.upsert / messaging-history.set / connection.update handlers
+          // every time. Calling it on an account that is already connected leaks a
+          // second live socket AND double-captures every incoming message (two
+          // _capture calls per upsert). If the provider already reports the account
+          // as connected, reuse the live socket — do NOT re-connect. Only connect
+          // when the account is not currently connected (needs_login / logged_out).
+          if (p.status(args.accountId) !== "connected") {
+            await p.connect?.(args.accountId, {});
+          }
+          const status = p.status(args.accountId);
+          try { setAccountStatus(projectDir, args.provider, args.accountId, status); } catch {}
+          return ok({ status });
+        }
+        case "comms_recall": {
+          const recall = commsRecall(projectDir, {
+            query: args.query, provider: args.provider, accountId: args.accountId,
+            chatId: args.chatId, since: args.since, until: args.until, limit: args.limit,
+          });
+          // Reviewing recall hits counts as "looking at" those chats: advance each
+          // hit chat's watermark to the newest hit ts so the freshness gate doesn't
+          // re-surface them next session. Hits carry {provider,accountId,chatId,ts}.
+          for (const h of recall.hits || []) {
+            try { setSeenMax(projectDir, h.provider, h.accountId, h.chatId, h.ts); } catch {}
+          }
+          return ok(recall);
+        }
+        case "comms_import_history": {
+          // Parse the WhatsApp "Export chat" .txt -> normalized Msg[], reconcile
+          // against the existing store by fingerprint (live/backfill win, §4.2),
+          // then append-only persist exactly the NEW import records.
+          const chatId = normalizeJid(args.chatId);
+          // §6.4 write-path guard: the store must never persist a non-allowlisted
+          // chat. The live-capture path enforces this in whatsapp.js (_capture);
+          // the import path is the parallel write path and MUST gate identically.
+          const cfg = readConfig(projectDir);
+          if (!isAllowed(cfg, args.provider, args.accountId, chatId)) {
+            return err(`comms_import_history: ${args.provider}/${args.accountId} chat not on allowlist: ${chatId || "(empty jid)"}`);
+          }
+          const existing = readAllMessages(projectDir, args.provider, args.accountId, chatId);
+          const parsed = parseWhatsAppExport(args.filePath, {
+            provider: args.provider, accountId: args.accountId, chatId,
+            // Optional: align the export's local wall-clock to UTC so an imported
+            // line and the same live-captured message share a minute bucket ->
+            // same fingerprint -> §4.2 live-wins fires (no dup in the overlap).
+            tzMinutes: Number.isFinite(args.tzMinutes) ? args.tzMinutes : undefined,
+          });
+          const { merged, added } = reconcileImport(existing, parsed);
+          for (const m of added) appendMessage(projectDir, m);
+          return ok({ added: added.length, total: merged.length });
+        }
+        default:
+          // Should not reach here since unknown tools are caught above.
+          return err(`unknown tool: ${name}`);
+      }
+    } catch (e) {
+      return err(`${name} failed: ${String(e?.message ?? e)}`);
+    }
+  }
+
+  return { tools: TOOL_DEFS, handleToolCall, resolveProjectDir, registry: reg };
+}
+
+// Entrypoint wiring (only when run directly / bundled) — eager reconnect of
+// known accounts, then stdio MCP. Guarded so unit tests import buildServer only.
+export async function main() {
+  const srv = buildServer({ env: process.env });
+  // Eager reconnect (§3.1): if COMMS_PROJECT_DIR is set and accounts exist, reconnect.
+  try {
+    const projectDir = process.env.COMMS_PROJECT_DIR;
+    if (projectDir) {
+      const cfg = readConfig(projectDir);
+      const provs = cfg?.providers || {};
+      for (const provName of Object.keys(provs)) {
+        const accounts = provs[provName]?.accounts || {};
+        for (const accountId of Object.keys(accounts)) {
+          try {
+            const p = srv.registry.get(provName, { projectDirFor: () => projectDir });
+            await p.connect?.(accountId, {});
+            log(`[comms] eager-reconnected ${provName}:${accountId}`);
+          } catch (e) { log(`[comms] eager reconnect failed for ${provName}:${accountId}: ${e.message}`); }
+        }
+      }
+    }
+  } catch (e) { log(`[comms] eager reconnect skipped: ${e.message}`); }
+
+  const mcp = new Server({ name: "comms", version: "0.7.0" }, { capabilities: { tools: {} } });
+  mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: srv.tools }));
+  mcp.setRequestHandler(CallToolRequestSchema, async (req) => srv.handleToolCall(req.params));
+  const transport = new StdioServerTransport();
+  await mcp.connect(transport);
+  log("[comms] ready");
+}
+
+// Run only when invoked as the bundle/entry (not on import).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => { log(`[comms] fatal: ${e.stack || e}`); process.exit(1); });
+}
