@@ -16,42 +16,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadIndex, linkPath, readLinkSummary } from "./paths.js";
+import { stem, tokenize, tokenizeStemmed, termFrequency } from "./scoring.js";
 
-// Lightweight stemming. Real Porter would conflate more aggressively but adds
-// ~150 lines; this handles the most common English plural/tense suffixes well
-// enough for "decisions / decision / decided / deciding" to share a root.
-// Embedding-based semantic recall is deferred — see README Phase-3 notes.
-function stem(t) {
-  if (!t) return t;
-  t = t.toLowerCase();
-  if (t.length < 4) return t;
-  if (t.endsWith("ies") && t.length > 4) return t.slice(0, -3) + "y";
-  if (t.endsWith("ied") && t.length > 4) return t.slice(0, -3) + "y";
-  if (t.endsWith("ing") && t.length > 5) return t.slice(0, -3);
-  if (t.endsWith("ed")  && t.length > 4) return t.slice(0, -2);
-  if (t.endsWith("es")  && t.length > 4) return t.slice(0, -2);
-  if (t.endsWith("s")   && t.length > 4 && !t.endsWith("ss") && !t.endsWith("us")) return t.slice(0, -1);
-  return t;
-}
-
-function tokenize(s) {
-  if (!s) return [];
-  return s.toLowerCase().split(/[^a-z0-9_+-]+/).filter((t) => t.length >= 2);
-}
-
-function tokenizeStemmed(s) {
-  return tokenize(s).map(stem);
-}
-
-// Count occurrences of each query stem in the document stems (term frequency).
-function termFrequency(docStems, queryStems) {
-  const counts = new Map();
-  for (const q of queryStems) counts.set(q, 0);
-  for (const d of docStems) {
-    if (counts.has(d)) counts.set(d, counts.get(d) + 1);
-  }
-  return counts;
-}
+// Re-export so existing importers of these from recall.js keep working, and
+// comms recall can pull them from either module. Single source of truth is
+// lib/scoring.js.
+export { stem, tokenize, tokenizeStemmed, termFrequency };
 
 function readRefs(projectDir, id, archived) {
   const f = path.join(linkPath(projectDir, id, archived), "refs.json");
