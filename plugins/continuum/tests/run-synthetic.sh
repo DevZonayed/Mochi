@@ -420,7 +420,7 @@ BAD_SD=$(grep -l 'CLAUDE_SKILL_DIR' "$PLUGIN_DIR"/commands/*.md 2>/dev/null | wc
 [ "$BAD_PR" = "0" ] && ok "no command uses \$CLAUDE_PLUGIN_ROOT" || fail "$BAD_PR file(s) still use \$CLAUDE_PLUGIN_ROOT"
 [ "$BAD_SD" = "0" ] && ok "no command uses \${CLAUDE_SKILL_DIR}" || fail "$BAD_SD file(s) still use \${CLAUDE_SKILL_DIR}"
 USES=$(grep -l 'cat \.continuum/\.plugin-root' "$PLUGIN_DIR"/commands/*.md 2>/dev/null | wc -l | tr -d ' ')
-[ "$USES" = "8" ] && ok "all 8 commands use .continuum/.plugin-root" || fail "only $USES commands use the file path"
+[ "$USES" = "9" ] && ok "all 9 commands use .continuum/.plugin-root" || fail "only $USES commands use the file path"
 
 # ============================================================================
 # 0.5.0 MEMORY layer: verification ledger + link provenance

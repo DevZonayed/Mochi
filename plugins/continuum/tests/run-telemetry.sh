@@ -191,6 +191,37 @@ ID_NEW=$(node -e "import('$PLUGIN_DIR/lib/install_id.js').then(m=>console.log(m.
 node "$PLUGIN_DIR/lib/telemetry_cli.js" purge --project-dir "$CLI_REPO" > /dev/null
 [ ! -f "$CLI_REPO/.continuum/telemetry/events.jsonl" ] && ok "purge removed local events" || fail "purge left events behind"
 
+# ---- TT17: three telemetry commands exist + registered in plugin.json ------
+echo
+echo "TT17 — telemetry.md/review-session.md/insights.md exist + registered (§13.8)"
+REPO_ROOT="$(cd "$PLUGIN_DIR/../.." && pwd)"
+PJSON="$REPO_ROOT/.claude-plugin/plugin.json"
+for c in telemetry review-session insights; do
+  [ -f "$PLUGIN_DIR/commands/$c.md" ] && ok "command file $c.md exists" || fail "missing $c.md"
+  python3 -c "import json,sys; d=json.load(open('$PJSON')); sys.exit(0 if any('commands/$c.md' in e for e in d['commands']) else 1)" \
+    && ok "$c.md registered in plugin.json commands[]" || fail "$c.md NOT registered"
+done
+grep -l '\$CLAUDE_PLUGIN_ROOT' "$PLUGIN_DIR"/commands/telemetry.md "$PLUGIN_DIR"/commands/review-session.md "$PLUGIN_DIR"/commands/insights.md 2>/dev/null \
+  && fail "a telemetry command uses unexpanded \$CLAUDE_PLUGIN_ROOT" || ok "no telemetry command uses \$CLAUDE_PLUGIN_ROOT"
+grep -qF "/mochi:feedback" "$PLUGIN_DIR/commands/review-session.md" && ok "review-session offers Arm-3 via /mochi:feedback (GitHub-only)" || fail "review-session missing Arm-3 routing"
+grep -qiE "github" "$PLUGIN_DIR/commands/review-session.md" && ok "Arm-3 routes to GitHub (not /v1/ingest)" || fail "Arm-3 GitHub routing copy missing"
+grep -qF "/v1/ingest" "$PLUGIN_DIR/commands/review-session.md" && fail "review-session must NOT send context to /v1/ingest" || ok "review-session does not route to /v1/ingest"
+grep -qF "/v1/summary" "$PLUGIN_DIR/commands/insights.md" && ok "insights fetches /v1/summary" || fail "insights missing /v1/summary"
+# review_cli emits a redacted distillation line (Zone-B dropped).
+RV_REPO="$TMP/rvrepo"; mkdir -p "$RV_REPO/.continuum/telemetry"
+node "$PLUGIN_DIR/lib/telemetry_review_cli.js" emit --project-dir "$RV_REPO" \
+  --distillation '{"task_category":"web-qa","tool_calls":10,"efficiency_score":0.4,"redundancy_pattern":"snapshot_then_retry","suggestion_tag":"batch_clicks","severity":"medium","suggestion_text":"PLANTED ADVICE","quality_issue":"/secret/x"}' > /dev/null
+RV=$(node -e "
+const fs=require('node:fs');
+const e=JSON.parse(fs.readFileSync('$RV_REPO/.continuum/telemetry/events.jsonl','utf8').trim().split('\n').pop());
+let bad=0; const t=(c,l)=>{ if(!c){console.log('FAIL',l);bad++;} };
+t(e.task_category==='web-qa','distillation task_category emitted');
+t(!('suggestion_text' in e),'suggestion_text dropped (Zone-B)');
+t(!('quality_issue' in e),'quality_issue dropped (Zone-B)');
+t(JSON.stringify(e).indexOf('PLANTED ADVICE')===-1,'no Zone-B free text leaked');
+console.log(bad===0?'RV OK':'RV BAD '+bad);")
+echo "$RV" | grep -qF "RV OK" && ok "review_cli emits redacted distillation (Zone-B dropped)" || fail "review_cli: $RV"
+
 # ---- (later tasks append assertions above this summary) --------------------
 echo
 echo "─────────────────────────────"
