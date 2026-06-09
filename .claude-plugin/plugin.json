@@ -1,13 +1,22 @@
 {
   "name": "mochi",
   "description": "A browser companion for AI assistants. Bundled MCP tools for Chrome automation, persistent project memory (Continuum chain), and an in-page hint modal — pair with the Mochi Chrome extension.",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "author": {
     "name": "Jonayed Ahamed",
     "email": "dev.jonayed@gmail.com"
   },
   "homepage": "https://github.com/DevZonayed/Mochi",
-  "keywords": ["browser", "automation", "qa", "testing", "memory", "continuum", "mcp", "chrome"],
+  "keywords": [
+    "browser",
+    "automation",
+    "qa",
+    "testing",
+    "memory",
+    "continuum",
+    "mcp",
+    "chrome"
+  ],
   "commands": [
     "./plugins/continuum/commands/checkpoint.md",
     "./plugins/continuum/commands/dream.md",
@@ -16,6 +25,9 @@
     "./plugins/continuum/commands/rename.md",
     "./plugins/continuum/commands/render.md",
     "./plugins/continuum/commands/status.md",
+    "./plugins/continuum/commands/telemetry.md",
+    "./plugins/continuum/commands/review-session.md",
+    "./plugins/continuum/commands/insights.md",
     "./plugins/qa/commands/qa.md",
     "./plugins/qa/commands/design-qa.md",
     "./plugins/qa/commands/playbook.md",

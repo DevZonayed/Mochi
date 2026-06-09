@@ -420,7 +420,7 @@ BAD_SD=$(grep -l 'CLAUDE_SKILL_DIR' "$PLUGIN_DIR"/commands/*.md 2>/dev/null | wc
 [ "$BAD_PR" = "0" ] && ok "no command uses \$CLAUDE_PLUGIN_ROOT" || fail "$BAD_PR file(s) still use \$CLAUDE_PLUGIN_ROOT"
 [ "$BAD_SD" = "0" ] && ok "no command uses \${CLAUDE_SKILL_DIR}" || fail "$BAD_SD file(s) still use \${CLAUDE_SKILL_DIR}"
 USES=$(grep -l 'cat \.continuum/\.plugin-root' "$PLUGIN_DIR"/commands/*.md 2>/dev/null | wc -l | tr -d ' ')
-[ "$USES" = "7" ] && ok "all 7 commands use .continuum/.plugin-root" || fail "only $USES commands use the file path"
+[ "$USES" = "9" ] && ok "all 9 commands use .continuum/.plugin-root" || fail "only $USES commands use the file path"
 
 # ============================================================================
 # 0.5.0 MEMORY layer: verification ledger + link provenance
@@ -1711,6 +1711,22 @@ echo '{"newestId":"m9","newestTs":1717800000,"oldestId":"m1","oldestTs":17177000
 echo '{"whatsapp/work/12345@s.whatsapp.net":1717700500}' > "$GF/.continuum/comms/.last-session-seen.json"
 gate_ctx "$GF" startup | grep -qi "new message" && ok "freshness note fires for device-suffix jid (normalized lookup)" || fail "freshness note missing — device-suffix jid not normalized in freshness gate"
 rm -rf "$GF"
+
+# ---- T63: telemetry gate anti-nag — silent on resume and compact -------------
+# The telemetry consent gate uses the same source-aware anti-nag pattern as the
+# comms gate (session_start.js telemetryGate: `source === 'startup' || source ===
+# 'clear'`). A future edit that drops the source check would re-introduce nagging
+# on every resume/compaction. This test locks down the suppression contract.
+echo
+echo "T63 — telemetry gate: undecided + resume/compact → silent (no ASK)"
+GT="$(mk_gate_repo)"
+# No .continuum/telemetry/config.json → decided:false (defaults). The gate MUST
+# stay silent for resume and compact even though a decision is still pending.
+gate_ctx "$GT" resume | grep -qF "[continuum:telemetry] This repo hasn't decided" && fail "telemetry ASK wrongly emitted on resume (anti-nag suppression broken)" || ok "telemetry gate silent on resume when undecided"
+gate_ctx "$GT" compact | grep -qF "[continuum:telemetry] This repo hasn't decided" && fail "telemetry ASK wrongly emitted on compact (anti-nag suppression broken)" || ok "telemetry gate silent on compact when undecided"
+rm -rf "$GT"
+
+echo; echo "=== telemetry hooks/commands ==="; bash "$PLUGIN_DIR/tests/run-telemetry.sh" || FAIL=$((FAIL+1))
 
 # ---- Summary -----------------------------------------------------------------
 echo
