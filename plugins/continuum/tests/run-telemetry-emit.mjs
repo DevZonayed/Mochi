@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const PLUGIN_DIR = path.resolve(fileURLToPath(import.meta.url), "../..");
 const { flush, MAX_QUEUE_BATCHES } = await import(path.join(PLUGIN_DIR, "lib/telemetry_emit.js"));
 const { writeConfig, INGEST_URL, INGEST_WRITE_KEY } = await import(path.join(PLUGIN_DIR, "lib/telemetry_config.js"));
-const { telemetryEventsPath, telemetryDir, telemetryQueuePath } = await import(path.join(PLUGIN_DIR, "lib/paths.js"));
+const { telemetryEventsPath, telemetryDir, telemetryQueuePath, telemetryWatermarkPath } = await import(path.join(PLUGIN_DIR, "lib/paths.js"));
 
 let pass = 0, fail = 0;
 const ok  = (m) => { console.log("  ✓", m); pass++; };
@@ -147,6 +147,75 @@ try {
   assert.equal(last[0].tool, "browser_wait", "newest failed batch retained after cap");
   ok("offline queue capped (oldest dropped, newest kept)");
 } catch (e) { bad("queue cap", e); }
+
+// E9: WATERMARK — second flush of unchanged events sends ZERO POSTs (no re-send).
+// Regression for: flush() re-POSTed the entire events.jsonl on every call
+// (server-side duplicate inflation). The watermark must prevent this.
+try {
+  const dir = tmpRepo();
+  writeConfig(dir, { decided: true, share: true, killSwitch: "on", iid: "iid-wm" });
+  writeEvents(dir, [EV, { ...EV, ts: EV.ts + 5, tool: "browser_type" }]);
+  const f1 = mockFetch({ status: 200 });
+  const r1 = await flush(dir, {}, { fetch: f1 });
+  assert.equal(f1.calls.length, 1, "first flush: one POST");
+  assert.equal(r1.sent, 1, "first flush: sent=1");
+  // Watermark must have been written.
+  assert.ok(fs.existsSync(telemetryWatermarkPath(dir)), "watermark file created after first flush");
+  const wm = JSON.parse(fs.readFileSync(telemetryWatermarkPath(dir), "utf8"));
+  assert.equal(wm.flushedLines, 2, "watermark records 2 flushed lines");
+  // Second flush — no new events in events.jsonl.
+  const f2 = mockFetch({ status: 200 });
+  const r2 = await flush(dir, {}, { fetch: f2 });
+  assert.equal(f2.calls.length, 0, "second flush of unchanged events: ZERO POSTs (watermark guard)");
+  assert.equal(r2.sent, 0, "second flush: sent=0");
+  ok("watermark: second flush of unchanged events sends zero POSTs");
+} catch (e) { bad("watermark: second flush sends zero POSTs", e); }
+
+// E10: WATERMARK — second flush sends only NEW events appended after the first flush.
+try {
+  const dir = tmpRepo();
+  writeConfig(dir, { decided: true, share: true, killSwitch: "on", iid: "iid-wm2" });
+  writeEvents(dir, [EV]);
+  const f1 = mockFetch({ status: 200 });
+  await flush(dir, {}, { fetch: f1 });
+  assert.equal(f1.calls.length, 1, "first flush: one POST");
+  // Append a NEW event after the first flush.
+  const EV2 = { ...EV, ts: EV.ts + 100, tool: "browser_scroll" };
+  fs.appendFileSync(telemetryEventsPath(dir), JSON.stringify(EV2) + "\n");
+  const f2 = mockFetch({ status: 200 });
+  const r2 = await flush(dir, {}, { fetch: f2 });
+  assert.equal(f2.calls.length, 1, "second flush: one POST for new event only");
+  const body2 = JSON.parse(f2.calls[0].opts.body);
+  assert.equal(body2.batch.length, 1, "second flush body has exactly 1 (new) event");
+  assert.equal(body2.batch[0].tool, "browser_scroll", "second flush sends only the new event");
+  ok("watermark: second flush sends only newly appended events");
+} catch (e) { bad("watermark: second flush sends only new events", e); }
+
+// E11: WATERMARK — failed flush advances the watermark (prevents double-send)
+//      and places the failed batch in the queue for retry.
+//      If watermark did NOT advance, the next flush would include those events as
+//      "fresh" PLUS find them in the queue — sending them twice.
+try {
+  const dir = tmpRepo();
+  writeConfig(dir, { decided: true, share: true, killSwitch: "on", iid: "iid-wm3" });
+  writeEvents(dir, [EV, { ...EV, ts: EV.ts + 1, tool: "browser_type" }]);
+  const f1 = mockFetch({ throwErr: new Error("network down") });
+  const r1 = await flush(dir, {}, { fetch: f1 });
+  assert.equal(r1.sent, 0, "failed flush: sent=0");
+  assert.equal(r1.queued, 1, "failed flush: batch queued for retry");
+  // Watermark MUST advance past all attempted events (2 lines) so the next flush
+  // does not re-include them as fresh (which would double-send with the queue).
+  assert.ok(fs.existsSync(telemetryWatermarkPath(dir)), "watermark file written even on failure");
+  const wmVal = JSON.parse(fs.readFileSync(telemetryWatermarkPath(dir), "utf8")).flushedLines;
+  assert.equal(wmVal, 2, "failed flush: watermark advances past attempted events (no double-send)");
+  // Retry with a working fetch — the queued batch is sent, no extra fresh events.
+  const f2 = mockFetch({ status: 200 });
+  const r2 = await flush(dir, {}, { fetch: f2 });
+  assert.equal(f2.calls.length, 1, "retry flush: exactly one POST (queued batch only, not fresh again)");
+  assert.equal(r2.sent, 1, "retry flush: sent=1 (the queued batch)");
+  assert.equal(r2.queued, 0, "retry flush: queue cleared on success");
+  ok("watermark: failed flush advances watermark + queues; retry sends once not twice");
+} catch (e) { bad("watermark: failed flush advances watermark + queues; retry sends once not twice", e); }
 
 console.log("─────────────────────────────");
 console.log("passed:", pass); console.log("failed:", fail);
