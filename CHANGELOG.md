@@ -8,7 +8,7 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.7.0] — 2026-06-10
+## [0.10.0] — 2026-06-10
 
 ### Added
 
@@ -35,6 +35,169 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
     tools-per-task-category, and a ranked improvement backlog.
   - New commands: `/mochi:telemetry`, `/mochi:review-session`, `/mochi:insights`.
     Deliberate bug/idea reports continue to use `/mochi:feedback` (GitHub issues).
+
+---
+
+## [0.9.1] — 2026-06-09
+
+### Fixed — Design-QA loop hardening (adversarial review of 0.9.0)
+
+- **The loop now actually closes client-side.** `browser_comment_add` activates
+  Comment Mode and injects the content script on the session tab, so agent
+  comments show up as **live pins immediately** — the human no longer has to open
+  Comment Mode first for anything to appear.
+- **No more silent comment loss between the agent and the human.** The background
+  bridge and the content script are independent writers of the same
+  `mochiComments` document; whole-document last-write-wins could drop either
+  side's comments during concurrent QA-while-reviewing. Writes are now merged by
+  **id-based union** (new `comment-merge.js`, unit-tested for no-loss +
+  convergence), with every comment carrying an `updatedAt` so edits/resolves win
+  deterministically.
+- **The agent no longer hijacks the human's active session.** A QA write only
+  auto-selects its session for an origin when the human isn't already viewing one
+  there.
+- **Repeated `browser_comment_add` calls with no `sessionName`** now reuse one
+  default `QA <date>` session instead of minting a new session every call.
+- **Breakpoint comments are never invisible.** They render as normal page pins
+  when the device frame is closed, and the in-frame width match is tolerant
+  (±60px) so emulate widths still reveal them. Malformed `{label,width}` values
+  are normalized away (no more `undefined` chips).
+- **`browser_comment_list` / `browser_comment_sessions`** default-scope to the
+  current session tab's origin (no cross-project leakage from a bare call).
+- **Popup comment count** reads the live `mochiComments` store instead of the
+  dead legacy key, so it reflects agent-added comments.
+- Page-level comments (no selector) anchor to `<body>`; the session-switcher
+  dropdown closes on FAB/dock clicks; `design-qa.md` documents the same-Chrome
+  requirement, `located` retries, and preset breakpoint widths.
+
+---
+
+## [0.9.0] — 2026-06-09
+
+### Added — Design-QA loop (browser MCP ↔ Comment Mode)
+
+- **Agent QA → comments → human review → bulk fix.** An agent can run a design-QA
+  pass over a running app and drop a Comment-Mode comment on each issue; those
+  comments appear to the human as **live pins** (the bridge writes the same
+  `mochiComments` store the extension reads). The human reviews/edits in the
+  browser, then the agent reads the session back and fixes everything in bulk.
+- **4 new browser-MCP tools** (count **61 → 65**): `browser_comment_add`,
+  `browser_comment_list`, `browser_comment_sessions`, `browser_comment_resolve`.
+- **`/mochi:design-qa [focus]`** — default design/UX heuristic pass (spacing,
+  contrast, overflow, broken/empty states, responsive, a11y, copy) with an
+  optional focus/criteria; **`/mochi:design-qa fix`** reads the session and
+  resolves each comment in code.
+- **Comment Mode:** **severity** tints on pins/list (grey/amber/red), a
+  **resolved** state (✓, dimmed/struck), a **current-session pill + switcher**
+  so you can pick the session to comment into, and **meaningful default session
+  names** (from the page title / project); QA sessions are named
+  `<repo> · <branch> — QA <date>`.
+
+---
+
+## [0.8.0] — 2026-06-09
+
+### Added — Comment Mode v2 (sessions, navigation, dock UI)
+
+- **Sessions are first-class.** Comments are organized into named, saved
+  **sessions scoped per site (domain/port)**. **New session** starts from zero;
+  **rename** (inline), **delete** (two-tap), and **switch** between them. Your
+  existing comments are migrated automatically into one session per site.
+- **Floating navigator** (draggable) with two views:
+  - **Sessions** — filter **This site / All sites**, see each session's site +
+    comment count, ＋ new; tapping a session on the current site makes it active.
+  - **Comments** — grouped by **route**; tap a comment to jump to it.
+- **Click-to-locate navigation.** Clicking a comment scrolls to its element;
+  if it lives on a **different route or page**, Mochi navigates there first and
+  then scrolls to it (the scroll target survives the page load).
+- **Dock-style FAB.** The bubble starts/stops commenting; **hovering** it reveals
+  a macOS-dock-style, staggered column of **icon** actions (Navigator ·
+  Responsive · Copy · End) with tooltips.
+- Per-session comment numbering (each starts at **#1**) and per-session
+  **Copy brief** (includes the session name).
+
+### Notes
+- Storage moved to a `mochiComments` document (one-time migration from the old
+  format runs automatically). Cross-tab edits sync, with a flush-before-adopt
+  guard so a tab's unsaved edits aren't clobbered.
+
+---
+
+## [0.7.3] — 2026-06-09
+
+### Added (Comment Mode — responsive)
+
+- **Custom device size** in the responsive frame — a "Custom" option with
+  width × height inputs.
+- **Scale-to-fit for oversize frames.** The preview iframe renders at the
+  *true* device size (so media queries stay accurate) and is visually scaled to
+  fit your window when the chosen size is larger than the viewport, with the
+  zoom level shown (e.g. `2560 × 1440 · 47%`); it re-fits on window resize. The
+  comment overlay (hover highlight, pins, popover) is scale-aware, so picking
+  stays pixel-accurate at any zoom.
+
+---
+
+## [0.7.2] — 2026-06-09
+
+### Fixed (Comment Mode)
+
+- **Comments are now scoped per-site (origin).** They were stored in one global
+  list and only the on-page pins were site-filtered, so the comments list, the
+  count badge, and **Copy brief** showed/exported *every* site's comments —
+  starting a session on a new website appeared to inherit the previous site's
+  comments. Now the count, list, export, and per-comment numbering (each site
+  starts at **#1**) are all scoped to the current site, and **Clear** removes
+  only the current site's comments. Storage keeps each site's comments isolated
+  by origin, so returning to a site restores its comments.
+
+---
+
+## [0.7.1] — 2026-06-09
+
+### Changed (Comment Mode UX, from user feedback)
+
+- **Sticky pick mode** — arm once (💬), then for each comment just **click an
+  element → type → Enter**. The picker stays armed (no re-clicking the bubble);
+  **Esc** (when nothing's open) or tapping 💬 finishes. Far fewer clicks.
+- **Easy cancel** — **Enter** saves (Shift+Enter = newline), **Esc** or
+  **clicking outside** the popover discards it; placeholder documents it.
+- The picker no longer swallows clicks on Mochi's own FAB / ⋯ menu while armed
+  (you can open the menu and finish without disarming first).
+
+### Fixed (Comment Mode)
+
+- **Responsive frame:** the hover highlight was rendered *behind* the device
+  overlay (so it looked like nothing happened) — raised above it; the frame now
+  **auto-arms** commenting on load, "Comment here" is a clear armed toggle, and
+  switching devices re-arms with the correct breakpoint.
+- **Top-frame guard:** the content script never mounts inside iframes (including
+  the responsive preview), preventing nested instances.
+
+---
+
+## [0.7.0] — 2026-06-07
+
+### Added
+
+- **Comment Mode — standalone visual annotation → agent-ready brief.** One click
+  (**💬 Comment mode** in the popup, no Claude session required) drops a floating
+  bubble on any page. Click an element to leave a numbered, anchored comment;
+  scrolling stays free (with a one-time scroll hint). Comments persist across
+  pages/reloads (`chrome.storage`), grouped by route in an iOS-style list, and
+  sync across tabs. A **Responsive** device-frame lets you comment at common
+  breakpoints. **Copy brief** exports markdown (selector + route + breakpoint +
+  element + note) to paste into any coding agent. New content script
+  `extension/comment-mode.js`; background re-injects on navigation; SPA route
+  changes are detected (history patch + popstate/hashchange). Verified
+  end-to-end in a real browser, then hardened against an adversarial review
+  (14 findings fixed: cross-tab sync, listener-leak-free teardown, per-tab
+  stop, hydration-race + stale-tab-id guards, sandboxed responsive iframe).
+  No new MCP tools (browser count stays 61).
+- **WhatsApp comms MCP** (from the parallel comms work merged here): a separate
+  `comms` MCP server (`server/dist/comms.bundle.mjs`) with WhatsApp messaging
+  tools, plus continuum comms recall/scoring. See the comms modules under
+  `server/src/comms/` and `plugins/continuum/lib/comms_*`.
 
 ---
 

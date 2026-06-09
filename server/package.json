@@ -1,6 +1,6 @@
 {
   "name": "mochi-server",
-  "version": "0.6.1",
+  "version": "0.9.1",
   "type": "module",
   "private": true,
   "description": "MCP server for the Mochi browser companion — speaks stdio MCP to AI clients and WebSocket to the Chrome extension. Bundled with esbuild into dist/server.bundle.mjs.",
@@ -12,7 +12,7 @@
     "build": "npm run build:browser && npm run build:comms",
     "build:browser": "esbuild src/index.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/server.bundle.mjs --legal-comments=external --banner:js=\"import{createRequire as ___cr}from'node:module';const require=___cr(import.meta.url);\"",
     "build:comms": "esbuild src/comms/index.js --bundle --platform=node --format=esm --target=node20 --outfile=dist/comms.bundle.mjs --legal-comments=external --log-override:indirect-require=silent --external:sharp --external:jimp --external:@img/* --banner:js=\"import{createRequire as ___cr}from'node:module';const require=___cr(import.meta.url);\"",
-    "test": "node _smoke.mjs && node _uploads.test.mjs && node _upload_wire.test.mjs && node _playbooks.test.mjs && node _playbook_wire.test.mjs && node _secrets.test.mjs && node _codebase_seed.test.mjs && node _visual_diff.test.mjs && node _playbook_bundles.test.mjs && node _playbook_dashboard.test.mjs && node _comms_build_config.test.mjs && node _comms_mcp_entry.test.mjs && node _comms_ci_verify.test.mjs && node _integration.mjs && node _multi-client.mjs && node _comms_normalize.test.mjs && node _comms_provider.test.mjs && node _comms_wa_lock.test.mjs && node _comms_wa_capture.test.mjs && node _comms_wa_lifecycle.test.mjs && node _comms_server.test.mjs && node _comms_smoke.mjs && node _comms_bundle_smoke.test.mjs && node ../plugins/continuum/tests/run-telemetry-all.mjs && node --test _telemetry_ci_verify.test.mjs",
+    "test": "node _smoke.mjs && node _uploads.test.mjs && node _upload_wire.test.mjs && node _playbooks.test.mjs && node _playbook_wire.test.mjs && node _secrets.test.mjs && node _codebase_seed.test.mjs && node _visual_diff.test.mjs && node _comment_merge.test.mjs && node _playbook_bundles.test.mjs && node _playbook_dashboard.test.mjs && node _comms_build_config.test.mjs && node _comms_mcp_entry.test.mjs && node _comms_ci_verify.test.mjs && node _integration.mjs && node _multi-client.mjs && node _comms_normalize.test.mjs && node _comms_provider.test.mjs && node _comms_wa_lock.test.mjs && node _comms_wa_capture.test.mjs && node _comms_wa_lifecycle.test.mjs && node _comms_server.test.mjs && node _comms_smoke.mjs && node _comms_bundle_smoke.test.mjs && node ../plugins/continuum/tests/run-telemetry-all.mjs && node --test _telemetry_ci_verify.test.mjs",
     "test:smoke": "node _smoke.mjs",
     "test:integration": "node _integration.mjs",
     "test:multi": "node _multi-client.mjs",
