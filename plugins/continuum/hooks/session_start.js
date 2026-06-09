@@ -24,7 +24,7 @@ import {
 } from "../lib/comms_state.js";
 import { normalizeJid } from "../lib/comms_allowlist.js";
 import { readConfig as readTelemetryConfig } from "../lib/telemetry_config.js";
-import { telemetryReviewsDir } from "../lib/paths.js";
+import { telemetryPendingReviewPath } from "../lib/paths.js";
 
 // Resolve the directory that holds the continuum plugin's lib/ — works
 // regardless of whether continuum is bundled inside super-tester or loaded
@@ -354,7 +354,7 @@ function telemetryGate(projectDir, source) {
   //    session is sampled, emit a one-shot auto-review directive and consume it.
   if (cfg.reviewAuto === true) {
     try {
-      const markerPath = path.join(telemetryReviewsDir(projectDir), "..", ".pending-review.json");
+      const markerPath = telemetryPendingReviewPath(projectDir);
       if (fs.existsSync(markerPath)) {
         let marker = {};
         try { marker = JSON.parse(fs.readFileSync(markerPath, "utf8")); } catch {}

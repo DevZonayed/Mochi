@@ -210,6 +210,12 @@ export function telemetryWatermarkPath(projectDir) {
 export function telemetryReviewsDir(projectDir) {
   return path.join(telemetryDir(projectDir), "reviews");
 }
+// pendingReviewPath is the single canonical location for the auto-review
+// trigger marker written by SessionEnd (Task 17) and consumed by SessionStart.
+// Both sides MUST import this helper — never derive the path independently.
+export function telemetryPendingReviewPath(projectDir) {
+  return path.join(telemetryDir(projectDir), ".pending-review.json");
+}
 // installIdPath is home-scoped, NOT project-scoped: one anonymous id per
 // machine/user. `homeDir` is injectable for tests; defaults to os.homedir().
 export function installIdPath(homeDir) {
