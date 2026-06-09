@@ -11,6 +11,10 @@
 // re-injects this script on navigation so the FAB + pins survive page changes.
 
 (() => {
+  // Top frame only — never mount inside iframes (incl. our own responsive
+  // preview frame, or any subframe we get injected into).
+  try { if (window.top !== window.self) return; } catch { return; }
+
   const HOST_ID = "mochi-comment-host-7f3a";
   const SKEY = "mochiCommentSession";
 
@@ -22,7 +26,10 @@
 
   // ---------------------------------------------------------------- state ----
   let session = { active: true, startedAt: Date.now(), taughtScroll: false, comments: [] };
-  let pickCtx = null;        // active picker context or null
+  // Sticky pick mode: once armed it stays on so you can drop many comments
+  // without re-arming. `listening` = hover/click handlers currently attached
+  // (paused while a comment popover is open).
+  let pickMode = false, pickTarget = null, listening = false;
   let rafPending = false;
   let saveTimer = null;
 
@@ -155,6 +162,8 @@
       .mbtn svg { color:var(--mut); flex-shrink:0; }
       .mbtn .pill { background:var(--pri); color:#fff; border-radius:9px; font-size:11px; padding:1px 6px; font-weight:700; }
       .mbtn.danger { color:var(--dng); }
+      .mbtn.on { background:var(--ok); color:#fff; border-color:var(--ok); }
+      .mbtn.on svg { color:#fff; }
 
       /* ---- pins ---- */
       .pin { position:fixed; width:24px; height:24px; border-radius:50% 50% 50% 2px; background:var(--pin); color:#fff;
@@ -167,7 +176,7 @@
       @keyframes flash { 0%,100%{ box-shadow:0 2px 6px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.8);} 50%{ box-shadow:0 0 0 8px rgba(37,99,235,.45),0 0 0 2px #fff;} }
 
       .hl { position:fixed; pointer-events:none; border:2px solid var(--pri); background:rgba(37,99,235,.10);
-        border-radius:3px; z-index:4; box-shadow:0 0 0 1px rgba(255,255,255,.6); transition:all 50ms ease-out; }
+        border-radius:3px; z-index:8; box-shadow:0 0 0 1px rgba(255,255,255,.6); transition:all 50ms ease-out; }
 
       .topbar { position:fixed; top:14px; left:50%; transform:translateX(-50%); background:rgba(20,20,22,.95);
         color:#fff; padding:8px 14px; border-radius:10px; font-size:12.5px; font-weight:500; z-index:9; pointer-events:none;
@@ -295,8 +304,8 @@
   fab.addEventListener("click", (e) => {
     e.stopPropagation();
     toggleMenu(false);
-    if (pickCtx) { stopPick(); return; }   // armed → click cancels
-    startPick(topPickTarget());             // one click → start commenting
+    if (pickMode) { stopPick(); return; }   // armed → click finishes
+    startPick(topPickTarget());             // one click → start commenting (stays on)
   });
   menuToggle.addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(); });
   // Click anywhere outside the FAB closes the menu. (Named so teardown can detach it.)
@@ -324,41 +333,58 @@
   }
 
   let hlEl = null, topbarEl = null;
+  // Enter sticky pick mode (stays armed across comments until Esc / 💬 / Done).
   function startPick(target) {
-    if (pickCtx) stopPick();
-    pickCtx = target;
+    if (pickMode) stopPick();
+    pickMode = true; pickTarget = target;
     fab.classList.add("armed");
     toggleMenu(false);
     closePop();
-    hlEl = document.createElement("div"); hlEl.className = "hl"; layer.appendChild(hlEl);
     topbarEl = document.createElement("div"); topbarEl.className = "topbar";
-    topbarEl.innerHTML = `<span>Click an element to comment</span><kbd>Esc</kbd><span>to cancel</span>`;
+    topbarEl.innerHTML = `<span>Click elements to comment — keep going.</span><kbd>Esc</kbd><span>or tap 💬 to finish</span>`;
     layer.appendChild(topbarEl);
-    target.doc.addEventListener("mousemove", onMove, true);
-    target.doc.addEventListener("click", onPick, true);
+    attachPickListeners();
+  }
+  // Attach the live hover/click handlers (paused while a popover is open).
+  function attachPickListeners() {
+    if (listening || !pickMode || !pickTarget) return;
+    listening = true;
+    hlEl = document.createElement("div"); hlEl.className = "hl"; layer.appendChild(hlEl);
+    const doc = pickTarget.doc;
+    doc.addEventListener("mousemove", onMove, true);
+    doc.addEventListener("click", onPick, true);
     // Bind Esc on BOTH the top document and the target doc — keydown inside an
     // iframe doesn't cross the frame boundary to the parent.
     document.addEventListener("keydown", onPickKey, true);
-    if (target.doc !== document) { try { target.doc.addEventListener("keydown", onPickKey, true); } catch {} }
+    if (doc !== document) { try { doc.addEventListener("keydown", onPickKey, true); } catch {} }
   }
-  function stopPick() {
-    const t = pickCtx; pickCtx = null;
-    fab.classList.remove("armed");
-    try { t && t.doc.removeEventListener("mousemove", onMove, true); } catch {}
-    try { t && t.doc.removeEventListener("click", onPick, true); } catch {}
+  function detachPickListeners() {
+    if (!listening) return;
+    listening = false;
+    const doc = pickTarget && pickTarget.doc;
+    try { doc && doc.removeEventListener("mousemove", onMove, true); } catch {}
+    try { doc && doc.removeEventListener("click", onPick, true); } catch {}
     document.removeEventListener("keydown", onPickKey, true);
-    try { t && t.doc !== document && t.doc.removeEventListener("keydown", onPickKey, true); } catch {}
-    try { hlEl?.remove(); } catch {} try { topbarEl?.remove(); } catch {}
-    hlEl = topbarEl = null;
+    try { doc && doc !== document && doc.removeEventListener("keydown", onPickKey, true); } catch {}
+    try { hlEl?.remove(); } catch {} hlEl = null;
   }
-  function onPickKey(e) { if (e.key === "Escape") { e.preventDefault(); stopPick(); } }
+  function resumePickIfActive() { if (pickMode) attachPickListeners(); }
+  // Fully exit pick mode.
+  function stopPick() {
+    detachPickListeners();
+    pickMode = false; pickTarget = null;
+    fab.classList.remove("armed");
+    try { topbarEl?.remove(); } catch {} topbarEl = null;
+    closePop();
+  }
+  function onPickKey(e) { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); stopPick(); } }
   function hostHit(el) { return el === host || host.contains(el); }
 
   function onMove(ev) {
-    if (!pickCtx || !hlEl) return;
-    const el = pickCtx.doc.elementFromPoint(ev.clientX, ev.clientY);
+    if (!listening || !hlEl || !pickTarget) return;
+    const el = pickTarget.doc.elementFromPoint(ev.clientX, ev.clientY);
     if (!el || hostHit(el)) { hlEl.style.opacity = "0"; return; }
-    const off = pickCtx.offset();
+    const off = pickTarget.offset();
     const r = el.getBoundingClientRect();
     hlEl.style.opacity = "1";
     hlEl.style.left = `${off.x + r.left}px`;
@@ -367,20 +393,26 @@
     hlEl.style.height = `${r.height}px`;
   }
   function onPick(ev) {
-    if (!pickCtx) return;
-    ev.preventDefault(); ev.stopPropagation();
-    const el = pickCtx.doc.elementFromPoint(ev.clientX, ev.clientY);
+    if (!listening || !pickTarget) return;
+    const el = pickTarget.doc.elementFromPoint(ev.clientX, ev.clientY);
+    // Let clicks on our own UI (FAB, ⋯ menu, popover) through so they still work
+    // while armed — only intercept clicks on actual page elements.
     if (!el || hostHit(el)) return;
-    const target = pickCtx;
-    stopPick();
+    ev.preventDefault(); ev.stopPropagation();
+    const target = pickTarget;
+    detachPickListeners();   // pause hovering while the popover is open (stay armed)
     openPop(el, target);
   }
 
   // ------------------------------------------------------------ popover ----
-  let popEl = null;
-  function closePop() { try { popEl?.remove(); } catch {} popEl = null; }
+  let popEl = null, popOutside = null;
+  function closePop() {
+    if (popOutside) { try { document.removeEventListener("click", popOutside, true); } catch {} popOutside = null; }
+    try { popEl?.remove(); } catch {} popEl = null;
+  }
   function openPop(el, target, existing) {
     closePop();
+    detachPickListeners();   // pause hovering while editing (stays armed if sticky)
     const off = target.offset();
     const r = el.getBoundingClientRect();
     const sx = target.win.scrollX || 0, sy = target.win.scrollY || 0;
@@ -390,7 +422,7 @@
     popEl.className = "pop";
     popEl.innerHTML = `
       <div class="ph"><span class="dot">${n}</span><span class="sel">${escapeHtml(sel)}</span></div>
-      <textarea placeholder="What's wrong / what should change here?"></textarea>
+      <textarea placeholder="What should change here?  ·  Enter to save, Esc to cancel"></textarea>
       <div class="pf">
         <span class="bp">${target.breakpoint ? "@ " + target.breakpoint.label : ""}</span>
         ${existing ? '<button class="btn danger" data-x="del">Delete</button>' : ''}
@@ -407,36 +439,43 @@
     const ta = popEl.querySelector("textarea");
     if (existing) ta.value = existing.text || "";
     ta.focus();
+
+    function finishClose() { closePop(); resumePickIfActive(); }
+    function doSave() {
+      const text = ta.value.trim();
+      if (!text) { ta.focus(); return; }
+      if (existing) { existing.text = text; }
+      else {
+        session.comments.push({
+          id: "c" + Date.now() + Math.floor(Math.random() * 1e4),
+          n, text,
+          url: location.href, route: routeOf(), origin: originOf(),
+          selector: sel, tagName: el.tagName.toLowerCase(), role: roleOf(el), elementText: describe(el),
+          box: { x: Math.round(r.left + sx), y: Math.round(r.top + sy), w: Math.round(r.width), h: Math.round(r.height) },
+          viewport: { w: target.win.innerWidth, h: target.win.innerHeight, dpr: target.win.devicePixelRatio || 1 },
+          breakpoint: target.breakpoint || null,
+          createdAt: Date.now(),
+        });
+      }
+      saveSession(); updateCounts(); renderPins();
+      toast(existing ? "Comment updated" : `Comment #${n} added`);
+      if (devState.open) renderDevPins();
+      finishClose();
+    }
     popEl.addEventListener("click", (e) => {
       const b = e.target.closest("[data-x]"); if (!b) return;
-      const x = b.dataset.x;
-      if (x === "cancel") { closePop(); return; }
-      if (x === "del") { deleteComment(existing.id); closePop(); return; }
-      if (x === "save") {
-        const text = ta.value.trim();
-        if (!text) { ta.focus(); return; }
-        if (existing) { existing.text = text; }
-        else {
-          session.comments.push({
-            id: "c" + Date.now() + Math.floor(Math.random() * 1e4),
-            n, text,
-            url: location.href, route: routeOf(), origin: originOf(),
-            selector: sel, tagName: el.tagName.toLowerCase(), role: roleOf(el), elementText: describe(el),
-            box: { x: Math.round(r.left + sx), y: Math.round(r.top + sy), w: Math.round(r.width), h: Math.round(r.height) },
-            viewport: { w: target.win.innerWidth, h: target.win.innerHeight, dpr: target.win.devicePixelRatio || 1 },
-            breakpoint: target.breakpoint || null,
-            createdAt: Date.now(),
-          });
-        }
-        saveSession(); updateCounts(); renderPins(); closePop();
-        toast(existing ? "Comment updated" : `Comment #${n} added`);
-        if (devState.open) renderDevPins();
-      }
+      if (b.dataset.x === "cancel") finishClose();
+      else if (b.dataset.x === "del") { deleteComment(existing.id); finishClose(); }
+      else if (b.dataset.x === "save") doSave();
     });
     ta.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") { e.preventDefault(); closePop(); }
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); popEl.querySelector('[data-x="save"]').click(); }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finishClose(); }
+      else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doSave(); }   // Enter saves · Shift+Enter = newline
     });
+    // Click anywhere outside the popover cancels it. All our UI lives in the
+    // closed shadow host, so a page click never targets the popover itself.
+    popOutside = (e) => { if (e.target === host || host.contains(e.target)) return; finishClose(); };
+    document.addEventListener("click", popOutside, true);
   }
 
   function deleteComment(id) {
@@ -591,7 +630,7 @@
       if (seg) { devState.idx = +seg.dataset.dev; applyDevice(); return; }
       const x = e.target.closest("[data-x]"); if (!x) return;
       if (x.dataset.x === "close") closeDevice();
-      else if (x.dataset.x === "pick") startDevPick();
+      else if (x.dataset.x === "pick") { if (pickMode) stopPick(); else startDevPick(); updateDevPickBtn(); }
     });
     devState.iframe.addEventListener("load", () => {
       try {
@@ -599,11 +638,20 @@
         void devState.iframe.contentDocument.body;
         devState.iframe.contentWindow.addEventListener("scroll", scheduleReposition, true);
         renderDevPins();
+        startDevPick();          // auto-arm so you can comment immediately
+        updateDevPickBtn();
       } catch {
         showDevNote("This page can't be annotated inside the responsive frame (it blocks embedding). The preview still reflows — comments here aren't available for this site.");
       }
     });
     applyDevice();
+  }
+  function updateDevPickBtn() {
+    if (!devState.el) return;
+    const b = devState.el.querySelector('[data-x="pick"]');
+    if (!b) return;
+    b.classList.toggle("on", pickMode);
+    b.lastChild && (b.lastChild.textContent = pickMode ? " Commenting — click elements" : " Comment here");
   }
   function applyDevice() {
     const dv = DEVICES[devState.idx];
@@ -617,7 +665,7 @@
     fw.style.width = dv.width + "px"; fw.style.height = h + "px";
     devState.iframe.style.width = dv.width + "px"; devState.iframe.style.height = h + "px";
     if (devState.iframe.src !== location.href) devState.iframe.src = location.href;
-    else renderDevPins();
+    else { renderDevPins(); if (pickMode) { startDevPick(); updateDevPickBtn(); } }
   }
   function showDevNote(msg) {
     const stage = devState.el.querySelector(".dstage");
