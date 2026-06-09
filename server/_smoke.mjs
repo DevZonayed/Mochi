@@ -27,6 +27,10 @@ const want = [
   "browser_playbook_import",
   "browser_playbook_dashboard",
   "browser_request_attention",
+  "browser_comment_add",
+  "browser_comment_list",
+  "browser_comment_sessions",
+  "browser_comment_resolve",
 ];
 const names = tools.map(t => t.name);
 for (const w of want) {

@@ -1132,6 +1132,10 @@ async function dispatch(type, p, clientId) {
     case "session_start":      return sessionStart(p, clientId);
     case "session_end":        return sessionEnd(p, clientId);
     case "request_attention":  return requestAttention(p, clientId);
+    case "comment_add":        return commentAdd(p, clientId);
+    case "comment_list":       return commentList(p, clientId);
+    case "comment_sessions":   return commentSessions(p, clientId);
+    case "comment_resolve":    return commentResolve(p, clientId);
     case "client_cleanup":     return clientCleanup(clientId);
     case "navigate":           return navigate(p, clientId);
     case "open_tab":           return openTab(p, clientId);
@@ -1339,6 +1343,106 @@ async function requestAttention({ reason, tabId, urgent = true } = {}, clientId)
     notifTargets.set(`mochi:${clientId}:attention`, { clientId, windowId: s.windowId, tabId });
   }
   return { ok: true, notified: shown, hasSession: !!s, reason: reason ?? null };
+}
+
+// ---------------- comment-mode bridge (agent QA ↔ human Comment Mode) ---------
+// Read-modify-write the SAME chrome.storage.local document Comment Mode uses, so
+// agent-created comments appear live as pins in the human's extension.
+const MC_KEY = "mochiComments";
+function mcGet() {
+  return new Promise((r) => {
+    try { chrome.storage.local.get([MC_KEY], (o) => r((o && o[MC_KEY]) || { v: 2, taughtScroll: false, activeByOrigin: {}, pending: null, sessions: {} })); }
+    catch { r({ v: 2, taughtScroll: false, activeByOrigin: {}, pending: null, sessions: {} }); }
+  });
+}
+function mcSet(store) { return new Promise((r) => { try { chrome.storage.local.set({ [MC_KEY]: store }, r); } catch { r(); } }); }
+const mcUid = (p) => p + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+
+// Resolve an element's selector/box/route metadata on the session's primary tab.
+async function resolveElementMeta(tabId, selector) {
+  try {
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target: { tabId }, args: [selector || ""],
+      func: (sel) => {
+        function uniq(el) {
+          if (!el || el.nodeType !== 1) return "";
+          if (el.id && /^[A-Za-z][A-Za-z0-9_-]*$/.test(el.id)) return "#" + el.id;
+          const parts = []; let c = el;
+          while (c && c.nodeType === 1 && c !== document.documentElement) {
+            let p = c.tagName.toLowerCase();
+            if (c.id && /^[A-Za-z][A-Za-z0-9_-]*$/.test(c.id)) { parts.unshift("#" + c.id); break; }
+            if (c.classList && c.classList.length) { const cl = [...c.classList].slice(0, 2).map((x) => x.replace(/[^A-Za-z0-9_-]/g, "")).filter(Boolean).join("."); if (cl) p += "." + cl; }
+            const par = c.parentElement;
+            if (par) { const sib = [...par.children].filter((x) => x.tagName === c.tagName); if (sib.length > 1) p += ":nth-of-type(" + (sib.indexOf(c) + 1) + ")"; }
+            parts.unshift(p); c = par; if (parts.length >= 6) break;
+          }
+          return parts.join(" > ") || el.tagName.toLowerCase();
+        }
+        const base = { route: location.pathname + location.search, url: location.href, origin: location.origin, viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio || 1 } };
+        const el = sel ? document.querySelector(sel) : null;
+        if (!el) return { ok: false, selector: sel || "", ...base };
+        const r = el.getBoundingClientRect();
+        return { ok: true, selector: uniq(el), tagName: el.tagName.toLowerCase(), role: el.getAttribute("role") || el.tagName.toLowerCase(),
+          elementText: (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 90),
+          box: { x: Math.round(r.left + scrollX), y: Math.round(r.top + scrollY), w: Math.round(r.width), h: Math.round(r.height) }, ...base };
+      },
+    });
+    return result || null;
+  } catch { return null; }
+}
+async function commentAdd({ selector, ref, text, sessionName, breakpoint, severity } = {}, clientId) {
+  const sess = clientId ? sessions.get(clientId) : null;
+  if (!sess) throw new Error("no active session");
+  const sel = selector || ref || "";
+  const meta = await resolveElementMeta(sess.primaryTabId, sel);
+  if (!meta) throw new Error("could not resolve the page");
+  const store = await mcGet();
+  const origin = meta.origin;
+  let s = Object.values(store.sessions).find((x) => x.origin === origin && x.name === sessionName);
+  if (!s) {
+    s = { id: mcUid("s"), name: sessionName || `QA ${new Date().toISOString().slice(0, 10)}`, origin, createdAt: Date.now(), updatedAt: Date.now(), comments: [] };
+    store.sessions[s.id] = s;
+  }
+  const n = s.comments.reduce((m, c) => Math.max(m, c.n || 0), 0) + 1;
+  const comment = {
+    id: mcUid("c"), sessionId: s.id, n, text: String(text || ""),
+    url: meta.url, route: meta.route, origin,
+    selector: meta.selector || sel, tagName: meta.tagName || "", role: meta.role || "", elementText: meta.elementText || "",
+    box: meta.box || { x: 0, y: 0, w: 0, h: 0 }, viewport: meta.viewport || { w: 0, h: 0, dpr: 1 },
+    breakpoint: breakpoint || null, severity: severity || null, resolved: false, createdAt: Date.now(),
+  };
+  s.comments.push(comment); s.updatedAt = Date.now();
+  store.activeByOrigin[origin] = s.id;   // make active so the human sees its pins
+  await mcSet(store);
+  return { ok: true, id: comment.id, n, sessionId: s.id, sessionName: s.name, located: !!meta.ok };
+}
+async function commentList({ sessionId, sessionName, origin, includeResolved = true } = {}) {
+  const store = await mcGet();
+  let list = Object.values(store.sessions);
+  if (sessionId) list = list.filter((s) => s.id === sessionId);
+  else if (sessionName) list = list.filter((s) => s.name === sessionName);
+  if (origin) list = list.filter((s) => s.origin === origin);
+  const comments = list.flatMap((s) => s.comments.map((c) => ({ ...c, sessionId: s.id, sessionName: s.name })))
+    .filter((c) => includeResolved || !c.resolved)
+    .sort((a, b) => (a.route || "").localeCompare(b.route || "") || (a.n - b.n));
+  return { ok: true, count: comments.length, comments };
+}
+async function commentSessions({ origin } = {}) {
+  const store = await mcGet();
+  const list = Object.values(store.sessions).filter((s) => !origin || s.origin === origin)
+    .map((s) => ({ id: s.id, name: s.name, origin: s.origin, count: s.comments.length, updatedAt: s.updatedAt }))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return { ok: true, sessions: list };
+}
+async function commentResolve({ id, resolved = true } = {}) {
+  const store = await mcGet();
+  let hit = false;
+  for (const s of Object.values(store.sessions)) {
+    const c = s.comments.find((x) => x.id === id);
+    if (c) { c.resolved = !!resolved; s.updatedAt = Date.now(); hit = true; break; }
+  }
+  if (hit) await mcSet(store);
+  return { ok: hit, id, resolved };
 }
 
 async function navigate({ url, tabId, bringToFront = false, hardReload = false, disableCache = false } = {}, clientId) {

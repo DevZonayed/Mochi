@@ -8,6 +8,29 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.9.0] — 2026-06-09
+
+### Added — Design-QA loop (browser MCP ↔ Comment Mode)
+
+- **Agent QA → comments → human review → bulk fix.** An agent can run a design-QA
+  pass over a running app and drop a Comment-Mode comment on each issue; those
+  comments appear to the human as **live pins** (the bridge writes the same
+  `mochiComments` store the extension reads). The human reviews/edits in the
+  browser, then the agent reads the session back and fixes everything in bulk.
+- **4 new browser-MCP tools** (count **61 → 65**): `browser_comment_add`,
+  `browser_comment_list`, `browser_comment_sessions`, `browser_comment_resolve`.
+- **`/mochi:design-qa [focus]`** — default design/UX heuristic pass (spacing,
+  contrast, overflow, broken/empty states, responsive, a11y, copy) with an
+  optional focus/criteria; **`/mochi:design-qa fix`** reads the session and
+  resolves each comment in code.
+- **Comment Mode:** **severity** tints on pins/list (grey/amber/red), a
+  **resolved** state (✓, dimmed/struck), a **current-session pill + switcher**
+  so you can pick the session to comment into, and **meaningful default session
+  names** (from the page title / project); QA sessions are named
+  `<repo> · <branch> — QA <date>`.
+
+---
+
 ## [0.8.0] — 2026-06-09
 
 ### Added — Comment Mode v2 (sessions, navigation, dock UI)

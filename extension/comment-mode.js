@@ -66,7 +66,9 @@
   }
   function newSessionObj(origin, name) {
     const count = Object.values(store.sessions).filter((x) => x.origin === origin).length + 1;
-    return { id: uid("s"), name: name || `Session ${count}`, origin, createdAt: Date.now(), updatedAt: Date.now(), comments: [] };
+    // Meaningful default: the app/page name (document.title) or host, + index.
+    const base = (document.title || "").trim().replace(/\s+/g, " ").slice(0, 40) || location.host || "Session";
+    return { id: uid("s"), name: name || `${base}${count > 1 ? " · " + count : ""}`, origin, createdAt: Date.now(), updatedAt: Date.now(), comments: [] };
   }
   function activeSession(create = true) {
     const o = originOf();
@@ -245,6 +247,25 @@
         white-space:nowrap; background:rgba(20,20,22,.96); color:#fff; font-size:11.5px; font-weight:600; padding:5px 9px;
         border-radius:8px; opacity:0; pointer-events:none; transition:opacity .12s, transform .12s; box-shadow:0 6px 18px rgba(0,0,0,.32); }
       .dico:hover::after { opacity:1; transform:translateY(-50%) scale(1); }
+
+      /* ---- current-session pill + switcher ---- */
+      .sesspill { pointer-events:auto; display:inline-flex; align-items:center; gap:6px; max-width:220px; align-self:flex-end;
+        background:var(--bg); color:var(--tx); border:1px solid var(--bd); border-radius:16px; box-shadow:var(--sh);
+        padding:5px 11px; cursor:pointer; font-size:11.5px; font-weight:600; transition:background 100ms; }
+      .sesspill:hover { background:var(--bg2); }
+      .sesspill-dot { width:7px; height:7px; border-radius:50%; background:var(--pri); flex-shrink:0; }
+      .sesspill-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .sessmenu { display:none; flex-direction:column; align-self:flex-end; width:230px; background:var(--bg); color:var(--tx);
+        border:1px solid var(--bd); border-radius:12px; box-shadow:var(--sh); overflow:hidden; padding:4px; }
+      .sessmenu.open { display:flex; }
+      .sessrow { display:flex; align-items:center; gap:8px; padding:7px 9px; border:none; background:transparent; color:var(--tx);
+        cursor:pointer; font-size:12.5px; font-family:inherit; border-radius:8px; text-align:left; }
+      .sessrow:hover { background:var(--bg2); }
+      .sessrow.on { font-weight:700; }
+      .sessrow .ck { width:12px; flex-shrink:0; color:var(--pri); }
+      .sessrow .nm { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .sessrow .ct { font-size:10.5px; color:var(--soft); }
+      .sessrow.newrow { color:var(--pri); font-weight:600; border-top:1px solid var(--bd); border-radius:0; margin-top:2px; }
       .mbtn { pointer-events:auto; display:inline-flex; align-items:center; gap:8px; height:38px; padding:0 13px 0 12px;
         background:var(--bg); color:var(--tx); border:1px solid var(--bd); border-radius:19px; box-shadow:var(--sh);
         cursor:pointer; font-size:12.5px; font-weight:600; transition:background 100ms, transform 80ms; white-space:nowrap; }
@@ -263,6 +284,8 @@
         transform:translate(-50%,-100%); transition:transform 90ms; z-index:6; }
       .pin:hover { transform:translate(-50%,-100%) scale(1.15); }
       .pin.detached { opacity:.5; filter:grayscale(.5); }
+      .pin.sev-high { background:#dc2626; } .pin.sev-medium { background:#f59e0b; } .pin.sev-low { background:#9ca3af; }
+      .pin.done { background:#16a34a; opacity:.7; }
       .pin.flash { animation:flash .8s ease-out 2; }
       @keyframes flash { 0%,100%{ box-shadow:0 2px 6px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.8);} 50%{ box-shadow:0 0 0 8px rgba(37,99,235,.45),0 0 0 2px #fff;} }
 
@@ -341,6 +364,11 @@
       .row .c .bp { background:var(--bg2); border-radius:8px; padding:0 6px; }
       .row .del { opacity:0; appearance:none; border:none; background:transparent; color:var(--dng); cursor:pointer; padding:2px; align-self:center; }
       .row:hover .del { opacity:.8; }
+      .row.resolved { opacity:.55; }
+      .row.resolved .tx { text-decoration:line-through; }
+      .row .n.sev-high { background:#dc2626; } .row .n.sev-medium { background:#f59e0b; } .row .n.sev-low { background:#9ca3af; }
+      .sev { text-transform:uppercase; font-weight:700; font-size:9.5px; letter-spacing:.03em; border-radius:6px; padding:0 5px; color:#fff; }
+      .sev.sev-high { background:#dc2626; } .sev.sev-medium { background:#f59e0b; } .sev.sev-low { background:#9ca3af; }
       .empty { text-align:center; color:var(--soft); font-size:12.5px; padding:36px 22px; line-height:1.6; }
 
       /* ---- responsive device frame ---- */
@@ -396,6 +424,8 @@
   const fabWrap = document.createElement("div");
   fabWrap.className = "fab-wrap";
   fabWrap.innerHTML = `
+    <div class="sessmenu"></div>
+    <button class="sesspill" title="Current comment session — click to switch"><span class="sesspill-dot"></span><span class="sesspill-name">…</span></button>
     <div class="dockzone">
       <div class="dock">
         <button class="dico" data-act="nav" data-tip="Navigator"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg></button>
@@ -413,10 +443,40 @@
   const dock = fabWrap.querySelector(".dock");
   const dockzone = fabWrap.querySelector(".dockzone");
 
+  const sesspill = fabWrap.querySelector(".sesspill");
+  const sesspillName = fabWrap.querySelector(".sesspill-name");
+  const sessmenu = fabWrap.querySelector(".sessmenu");
   function updateCounts() {
     const n = currentComments().length;   // active session (this site)
     root.querySelectorAll("[data-count]").forEach((e) => { e.textContent = String(n); e.style.display = n ? "" : "none"; });
+    const s = activeSession(false);
+    if (sesspillName) sesspillName.textContent = s ? s.name : "Start a session";
+    if (sessmenu.classList.contains("open")) renderSessMenu();
   }
+  // Quick current-session switcher (so you can comment into the agent's session).
+  function renderSessMenu() {
+    const list = sessionsForOrigin(originOf());
+    const activeId = activeSessionId();
+    sessmenu.innerHTML =
+      list.map((s) => `<button class="sessrow${s.id === activeId ? " on" : ""}" data-sw="${s.id}"><span class="ck">${s.id === activeId ? "✓" : ""}</span><span class="nm">${escapeHtml(s.name)}</span><span class="ct">${s.comments.length}</span></button>`).join("")
+      + `<button class="sessrow newrow" data-sw="__new">＋ New session</button>`;
+  }
+  sesspill.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = sessmenu.classList.toggle("open");
+    if (open) renderSessMenu();
+  });
+  sessmenu.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-sw]"); if (!b) return;
+    e.stopPropagation();
+    if (b.dataset.sw === "__new") { newSession(); } else { switchSession(b.dataset.sw); }
+    sessmenu.classList.remove("open");
+    updateCounts(); renderPins(); if (devState.open) renderDevPins(); if (panelEl) renderPanel();
+  });
+  function onDocClickCloseSessMenu(e) {
+    if (sessmenu.classList.contains("open") && !(e.target === host || host.contains(e.target))) sessmenu.classList.remove("open");
+  }
+  document.addEventListener("click", onDocClickCloseSessMenu, true);
 
   let dockTimer = null;
   function openDock() {
@@ -620,16 +680,19 @@
     for (const c of want) {
       let el = pinEls.get(c.id);
       if (!el) {
-        el = document.createElement("div"); el.className = "pin"; el.textContent = c.n;
-        el.title = c.text;
+        el = document.createElement("div"); el.dataset.id = c.id;
         el.addEventListener("click", (ev) => {
           ev.stopPropagation();
-          let node = null; try { node = document.querySelector(c.selector); } catch {}
-          if (node) openPop(node, topPickTarget(), c);
+          const cur = findCommentById(el.dataset.id) || c;
+          let node = null; try { node = document.querySelector(cur.selector); } catch {}
+          if (node) openPop(node, topPickTarget(), cur);
           else toast("Element not found on this page");
         });
         layer.appendChild(el); pinEls.set(c.id, el);
       }
+      el.className = "pin" + (c.severity ? " sev-" + c.severity : "") + (c.resolved ? " done" : "");
+      el.textContent = c.resolved ? "✓" : c.n;
+      el.title = (c.severity ? "[" + c.severity + "] " : "") + c.text;
     }
     positionPins();
   }
@@ -844,10 +907,10 @@
     for (const route of Object.keys(groups)) {
       const h = document.createElement("div"); h.className = "grp-h"; h.textContent = route; body.appendChild(h);
       for (const c of groups[route]) {
-        const row = document.createElement("div"); row.className = "row";
-        row.innerHTML = `<span class="n">${c.n}</span>
+        const row = document.createElement("div"); row.className = "row" + (c.resolved ? " resolved" : "");
+        row.innerHTML = `<span class="n${c.severity ? " sev-" + c.severity : ""}">${c.resolved ? "✓" : c.n}</span>
           <div class="c"><div class="tx">${escapeHtml(c.text)}</div>
-            <div class="meta"><span>${escapeHtml(c.tagName)}</span>${c.breakpoint ? `<span class="bp">${escapeHtml(c.breakpoint.label)}</span>` : ""}<span>${escapeHtml((c.elementText || "").slice(0, 40))}</span></div></div>
+            <div class="meta">${c.severity ? `<span class="sev sev-${c.severity}">${c.severity}</span>` : ""}<span>${escapeHtml(c.tagName)}</span>${c.breakpoint ? `<span class="bp">${escapeHtml(c.breakpoint.label)}</span>` : ""}<span>${escapeHtml((c.elementText || "").slice(0, 40))}</span></div></div>
           <button class="del" data-del title="Delete">✕</button>`;
         row.addEventListener("click", (e) => {
           if (e.target.closest("[data-del]")) { deleteComment(c.id); renderPanel(); return; }
@@ -1041,8 +1104,7 @@
       let node = null; try { node = doc.querySelector(c.selector); } catch {}
       let el = existing.get(c.id);
       if (!el) {
-        el = document.createElement("div"); el.className = "pin"; el.dataset.id = c.id; el.textContent = c.n; el.style.pointerEvents = "auto";
-        el.title = c.text;
+        el = document.createElement("div"); el.dataset.id = c.id; el.style.pointerEvents = "auto";
         // Re-resolve the node at click time (the one captured at creation may be
         // null if async content hadn't rendered yet).
         el.addEventListener("click", (ev) => {
@@ -1052,6 +1114,9 @@
         });
         devState.overlay.appendChild(el);
       }
+      el.className = "pin" + (c.severity ? " sev-" + c.severity : "") + (c.resolved ? " done" : "");
+      el.textContent = c.resolved ? "✓" : c.n;
+      el.title = c.text;
       if (node) {
         const r = node.getBoundingClientRect();
         // overlay sits over the (scaled) iframe; element rects are in device px,
@@ -1175,6 +1240,7 @@
     try { stopPick(); } catch {} try { closeDevice(); } catch {}
     window.removeEventListener("scroll", scheduleReposition, true);
     window.removeEventListener("resize", scheduleReposition, true);
+    try { document.removeEventListener("click", onDocClickCloseSessMenu, true); } catch {}
     try { chrome.runtime.onMessage.removeListener(onRuntimeMessage); } catch {}
     try { chrome.storage.onChanged.removeListener(onStorageChanged); } catch {}
     unpatchHistory();
