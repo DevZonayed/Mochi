@@ -187,3 +187,46 @@ document.getElementById("notif-open-settings-btn").addEventListener("click", asy
 
 refreshNotif();
 setInterval(refreshNotif, 2000);
+
+// ---------- Comment mode ----------
+const cmBtn = document.getElementById("comment-toggle-btn");
+const cmStatus = document.getElementById("comment-status");
+
+async function refreshComment() {
+  let res;
+  try { res = await chrome.runtime.sendMessage({ type: "popup_comment_status" }); } catch { return; }
+  if (!res) return;
+  if (res.active) {
+    cmBtn.textContent = "■ Stop commenting";
+    cmBtn.classList.remove("primary");
+    cmStatus.className = "status ok";
+    cmStatus.textContent = `${res.count} comment${res.count === 1 ? "" : "s"} · open the bubble on the page`;
+  } else {
+    cmBtn.textContent = "💬 Start commenting";
+    cmBtn.classList.add("primary");
+    cmStatus.textContent = res.count ? `${res.count} saved comment${res.count === 1 ? "" : "s"} (resume on a page)` : "";
+  }
+}
+
+cmBtn.addEventListener("click", async () => {
+  const res = await chrome.runtime.sendMessage({ type: "popup_comment_status" });
+  if (res && res.active) {
+    await chrome.runtime.sendMessage({ type: "popup_stop_comment_session" });
+    cmStatus.className = "status";
+    cmStatus.textContent = "Stopped.";
+  } else {
+    const r = await chrome.runtime.sendMessage({ type: "popup_start_comment_session" });
+    if (r && r.ok) {
+      cmStatus.className = "status ok";
+      cmStatus.textContent = "Started — look for the 💬 bubble at the bottom-right of the page.";
+      setTimeout(() => window.close(), 700);
+    } else {
+      cmStatus.className = "status err";
+      cmStatus.textContent = (r && r.error) || "Couldn't start on this page.";
+    }
+  }
+  refreshComment();
+});
+
+refreshComment();
+setInterval(refreshComment, 2000);

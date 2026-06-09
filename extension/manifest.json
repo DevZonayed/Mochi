@@ -41,11 +41,14 @@
         "mac":     "Command+Shift+M"
       },
       "description": "Open the Mochi send-hint modal on the current page"
+    },
+    "toggle-comment-mode": {
+      "description": "Toggle Mochi comment mode on the current page (assign a key in chrome://extensions/shortcuts)"
     }
   },
   "web_accessible_resources": [
     {
-      "resources": ["mochi-modal.js"],
+      "resources": ["mochi-modal.js", "comment-mode.js"],
       "matches": ["<all_urls>"]
     }
   ]
