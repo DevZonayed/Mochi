@@ -80,6 +80,50 @@ echo "$OUT_FE" | grep -qF "browser_emulate_viewport" && ok "frontend-verify dire
 [ -f "$FE_REPO/.continuum/.frontend-changes.jsonl" ] && ok "frontend-changes log still written" || fail "REGRESSION: change log not written"
 [ -f "$FE_REPO/.continuum/telemetry/events.jsonl" ] && ok "edit also recorded in telemetry" || fail "edit not recorded in telemetry"
 
+# ---- TT11: session_start adds telemetry/ to an EXISTING .gitignore ---------
+echo
+echo "TT11 — giWanted gains telemetry/ on an EXISTING .gitignore (§13.7)"
+GI_REPO="$TMP/girepo"; mkdir -p "$GI_REPO/.continuum"
+git -C "$GI_REPO" init -q
+printf 'verification/\nruns/\ncomms/*\n' > "$GI_REPO/.continuum/.gitignore"
+echo '{"session_id":"sg","cwd":"'"$GI_REPO"'","hook_event_name":"SessionStart","source":"startup"}' \
+  | node "$PLUGIN_DIR/hooks/session_start.js" > /dev/null 2>&1
+grep -qx "telemetry/" "$GI_REPO/.continuum/.gitignore" && ok "telemetry/ appended to existing .gitignore" || fail "telemetry/ not appended to existing .gitignore"
+[ "$(grep -c '^verification/$' "$GI_REPO/.continuum/.gitignore")" = "1" ] && ok "existing entries not duplicated" || fail "gitignore appender duplicated lines"
+
+# ---- TT12: undecided + startup => two-toggle telemetry consent directive ----
+echo
+echo "TT12 — telemetry consent gate emits two-toggle prompt with cost disclosure (§13.3 M4)"
+TC_REPO="$TMP/tcrepo"; mkdir -p "$TC_REPO/.continuum/chain/links/0001"
+git -C "$TC_REPO" init -q
+printf '{"id":1,"ts":"2026-06-09T00:00:00Z","commit":null,"summary_tokens":5,"tags":["x"]}\n' > "$TC_REPO/.continuum/chain/index.jsonl"
+echo 'baseline' > "$TC_REPO/.continuum/chain/links/0001/summary.md"
+echo '# State' > "$TC_REPO/.continuum/STATE.md"
+mkdir -p "$TC_REPO/.continuum/comms"; printf '{"version":1,"decided":true,"declined":true}\n' > "$TC_REPO/.continuum/comms/config.json"
+OUT_TC=$(echo '{"session_id":"st","cwd":"'"$TC_REPO"'","hook_event_name":"SessionStart","source":"startup"}' \
+  | node "$PLUGIN_DIR/hooks/session_start.js")
+CTX_TC=$(echo "$OUT_TC" | python3 -c "import json,sys; print(json.load(sys.stdin)['hookSpecificOutput']['additionalContext'])" 2>/dev/null || echo "")
+echo "$CTX_TC" | grep -q "telemetry" && ok "telemetry gate text present" || fail "telemetry consent gate missing"
+echo "$CTX_TC" | grep -qiE "anonymous, content-free" && ok "share prompt copy present" || fail "share prompt copy missing"
+echo "$CTX_TC" | grep -qiE "tokens|cost" && ok "auto-review token-cost disclosed (M4)" || fail "token cost not disclosed"
+echo "$CTX_TC" | grep -qF "/mochi:telemetry show" && ok "audit affordance referenced" || fail "show affordance missing"
+
+# ---- TT13: decided+reviewAuto + pending-review marker => auto-review directive
+echo
+echo "TT13 — auto-review directive emitted when reviewAuto on + sampled pending marker"
+AR_REPO="$TMP/arrepo"; mkdir -p "$AR_REPO/.continuum/chain/links/0001" "$AR_REPO/.continuum/telemetry"
+git -C "$AR_REPO" init -q
+printf '{"id":1,"ts":"2026-06-09T00:00:00Z","commit":null,"summary_tokens":5,"tags":["x"]}\n' > "$AR_REPO/.continuum/chain/index.jsonl"
+echo 'baseline' > "$AR_REPO/.continuum/chain/links/0001/summary.md"; echo '# State' > "$AR_REPO/.continuum/STATE.md"
+mkdir -p "$AR_REPO/.continuum/comms"; printf '{"version":1,"decided":true,"declined":true}\n' > "$AR_REPO/.continuum/comms/config.json"
+printf '{"decided":true,"share":true,"reviewAuto":true,"killSwitch":"on","sampleN":1}\n' > "$AR_REPO/.continuum/telemetry/config.json"
+printf '{"sid":"prev","archive_path":"%s/.continuum/archive/transcripts/prev.jsonl.gz","tool_calls":12}\n' "$AR_REPO" > "$AR_REPO/.continuum/telemetry/.pending-review.json"
+OUT_AR=$(echo '{"session_id":"sa","cwd":"'"$AR_REPO"'","hook_event_name":"SessionStart","source":"startup"}' \
+  | node "$PLUGIN_DIR/hooks/session_start.js")
+CTX_AR=$(echo "$OUT_AR" | python3 -c "import json,sys; print(json.load(sys.stdin)['hookSpecificOutput']['additionalContext'])" 2>/dev/null || echo "")
+echo "$CTX_AR" | grep -qF "/mochi:review-session" && ok "auto-review directive references review-session" || fail "auto-review directive missing"
+[ ! -f "$AR_REPO/.continuum/telemetry/.pending-review.json" ] && ok "pending-review marker consumed (single-emit)" || fail "pending marker not cleared"
+
 # ---- (later tasks append assertions above this summary) --------------------
 echo
 echo "─────────────────────────────"

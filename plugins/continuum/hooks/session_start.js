@@ -23,6 +23,8 @@ import {
   accountStatuses,
 } from "../lib/comms_state.js";
 import { normalizeJid } from "../lib/comms_allowlist.js";
+import { readConfig as readTelemetryConfig } from "../lib/telemetry_config.js";
+import { telemetryReviewsDir } from "../lib/paths.js";
 
 // Resolve the directory that holds the continuum plugin's lib/ — works
 // regardless of whether continuum is bundled inside super-tester or loaded
@@ -319,6 +321,62 @@ function commsGate(projectDir, source) {
   return out;
 }
 
+// Telemetry consent + auto-review gate (§7, §13.3). fs-only — emits directives;
+// the agent does the asking/reviewing. Two independent opt-ins (M4): share +
+// reviewAuto. Single-emit: the pending-review marker is consumed here.
+function telemetryGate(projectDir, source) {
+  let out = "";
+  let cfg;
+  try { cfg = readTelemetryConfig(projectDir); } catch { return ""; }
+  if (cfg.killSwitch === "off") return ""; // fully disabled
+
+  // 1) Undecided about SHARING → ask once, on a real init (startup/clear) only.
+  if (!cfg.decided) {
+    if (source === "startup" || source === "clear") {
+      out +=
+        "\n\n---\n\n" +
+        "[continuum:telemetry] This repo hasn't decided about sharing anonymous usage telemetry. " +
+        "Ask the user, once, with BOTH opt-ins (they are independent):\n" +
+        "(1) *\"Help improve mochi? I can share **anonymous, content-free** usage stats — tool names, " +
+        "counts, error types, durations — **never** your prompts, code, file contents, or messages. " +
+        "You can see exactly what would be sent with `/mochi:telemetry show`. Share? (yes/no)\"*\n" +
+        "(2) *\"Separately: enable **auto efficiency-review**? It reviews a sampled session with the " +
+        "agent and **spends your own Claude tokens** (~a few thousand tokens per sampled session, " +
+        "1-in-N sampling). Default off; `/mochi:review-session` is always available on demand. Enable? (yes/no)\"*\n" +
+        "Write the answers immediately via `/mochi:telemetry on|off` and `/mochi:telemetry review-auto on|off` " +
+        "so I never ask again. A rotating random install-id links your sessions over a short period; " +
+        "lawful basis is your explicit consent; opt out + purge any time with `/mochi:telemetry off` / `/mochi:telemetry purge`.";
+    }
+    return out;
+  }
+
+  // 2) Decided + reviewAuto on → if a pending-review marker exists and the
+  //    session is sampled, emit a one-shot auto-review directive and consume it.
+  if (cfg.reviewAuto === true) {
+    try {
+      const markerPath = path.join(telemetryReviewsDir(projectDir), "..", ".pending-review.json");
+      if (fs.existsSync(markerPath)) {
+        let marker = {};
+        try { marker = JSON.parse(fs.readFileSync(markerPath, "utf8")); } catch {}
+        const n = Number(cfg.sampleN) > 0 ? Math.trunc(cfg.sampleN) : 10;
+        const sampled = (Math.floor(Math.random() * n) === 0);
+        try { fs.unlinkSync(markerPath); } catch {} // consume unconditionally (single-emit)
+        if (sampled) {
+          const archive = marker.archive_path || "(the most recent archived transcript)";
+          out +=
+            "\n\n---\n\n" +
+            "[continuum:telemetry] Auto efficiency-review is on and the previous session was sampled. " +
+            "Run `/mochi:review-session` against the archived transcript:\n\n`" + archive + "`\n\n" +
+            "Read it, produce the Arm-2 critique + distillation, save the full critique locally under " +
+            "`.continuum/telemetry/reviews/`, and (if sharing is on) emit the Zone-A distillation. " +
+            "Keep it bounded — this spends the user's tokens.";
+        }
+      }
+    } catch {}
+  }
+  return out;
+}
+
 async function main() {
   const stdinRaw = await readStdin();
   let payload = {};
@@ -353,6 +411,7 @@ async function main() {
       "runs/",
       "uploads/",
       "screenshots/",
+      "telemetry/",
       ".env-provenance.json",
       "comms/*",
       "!comms/config.json",
@@ -438,6 +497,7 @@ async function main() {
   // Comms init / onboarding / freshness gate (spec §8) is appended here, before
   // the single emit. (Added in the next task.)
   context += commsGate(projectDir, payload.source);
+  context += telemetryGate(projectDir, payload.source);
 
   emitContextOnce(context);
 }
