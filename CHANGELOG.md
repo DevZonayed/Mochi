@@ -8,6 +8,36 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.10.0] — 2026-06-10
+
+### Added
+
+- **Mochi Insight — opt-in, anonymous usage telemetry + a local efficiency
+  critique.** A privacy-first feedback system so the plugin can be improved from
+  real usage:
+  - **Local capture (always on, never leaves the machine):** the hooks record
+    content-free events (tool/MCP name, ok/fail, error *category*, duration
+    *bucket*) to `.continuum/telemetry/` (gitignored). `pre_tool_use` stays
+    hot-path-safe (append-only, no network).
+  - **Opt-in sharing (default: share nothing):** a one-time consent gate (same
+    style as comms) shares only anonymous, content-free aggregates. A
+    **fail-closed redactor** (key-whitelist + enum value-coercion + third-party
+    name bucketing) guarantees no prompts, code, paths, or chat/WhatsApp content
+    ever leave; `/mochi:telemetry show` prints byte-for-byte what would be sent.
+  - **Efficiency critique (`/mochi:review-session`):** the agent reviews a
+    finished session locally and gives constructive "this took N calls — here's a
+    leaner path" advice; only an anonymized distillation (categories + scores) is
+    shared, the full critique stays local. A second, separate opt-in covers the
+    token cost of automatic reviews.
+  - **Self-hosted ingest + dashboard (`telemetry-server/`):** a zero-dependency
+    Node server; content is re-stripped server-side; an owner-only dashboard
+    shows top tools/MCPs, error rates, tool co-occurrence, calls-per-task,
+    tools-per-task-category, and a ranked improvement backlog.
+  - New commands: `/mochi:telemetry`, `/mochi:review-session`, `/mochi:insights`.
+    Deliberate bug/idea reports continue to use `/mochi:feedback` (GitHub issues).
+
+---
+
 ## [0.9.1] — 2026-06-09
 
 ### Fixed — Design-QA loop hardening (adversarial review of 0.9.0)

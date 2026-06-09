@@ -12,6 +12,10 @@
 
 import { paths } from "../lib/paths.js";
 import { archiveTranscript, writeSentinel } from "../lib/archive.js";
+import { appendEvent } from "../lib/telemetry_log.js";
+import { redactEvent } from "../lib/telemetry_redact.js";
+import { readConfig as readTelemetryConfig } from "../lib/telemetry_config.js";
+import { getInstallId } from "../lib/install_id.js";
 
 async function readStdin() {
   return await new Promise((resolve) => {
@@ -44,6 +48,25 @@ async function main() {
       transcript_path: transcriptPath,
       archive_path: archivePath,
     });
+    // [telemetry] Compaction counter — a Zone-A signal used to prioritize Arm-2
+    // auto-review (§5 confusion heuristics). Reason is a CATEGORY only.
+    try {
+      const tcfg = readTelemetryConfig(projectDir);
+      if (tcfg.killSwitch !== "off") {
+        appendEvent(projectDir, redactEvent({
+          ts: Math.floor(Date.now() / 1000),
+          sid: sessionId || "",
+          iid: getInstallId(),
+          tool: "session_compact",
+          mcp: "",
+          ok: true,
+          err: "",
+          dur_b: matcher === "auto" ? "auto" : "manual", // coarse reason bucket
+          v: process.env.MOCHI_PLUGIN_VERSION || "0.7.0",
+          os: process.platform,
+        }));
+      }
+    } catch {}
   } catch (err) {
     process.stderr.write(`[continuum:pre_compact] ${err?.message ?? err}\n`);
   }
