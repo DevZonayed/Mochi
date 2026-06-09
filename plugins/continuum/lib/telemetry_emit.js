@@ -147,7 +147,11 @@ async function postBatch(fetchFn, iid, batch) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetchFn(INGEST_URL, {
+    // MOCHI_INGEST_URL override lets tests/CI point flush at a local no-op so the
+    // real session-end hook (a subprocess whose fetch can't be mocked) never POSTs
+    // to the baked-in production endpoint.
+    const url = (typeof process !== "undefined" && process.env && process.env.MOCHI_INGEST_URL) || INGEST_URL;
+    const res = await fetchFn(url, {
       method: "POST",
       headers: { "content-type": "application/json", "x-mochi-key": INGEST_WRITE_KEY },
       body: JSON.stringify({ iid, batch }),

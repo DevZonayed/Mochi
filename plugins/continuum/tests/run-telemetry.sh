@@ -7,6 +7,9 @@ PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d -t mochi-telemetry.XXXXXX)"
 # Sandbox HOME so install-id writes to a throwaway ~/.mochi, never the real one.
 export HOME="$TMP/home"; mkdir -p "$HOME"
+# Point telemetry emit at a dead local no-op so real session-end/flush subprocesses
+# (whose fetch can't be mocked) NEVER POST to the baked-in production ingest endpoint.
+export MOCHI_INGEST_URL="http://127.0.0.1:1/noop"
 trap 'rm -rf "$TMP"' EXIT
 PASS=0; FAIL=0
 ok()   { echo "  ✓ $*"; PASS=$((PASS+1)); }
