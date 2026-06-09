@@ -49,6 +49,26 @@ origin, tagName, role, text }`), reusing the same `uniqueSelector` logic Comment
 so selectors are consistent. If `ref` is a CSS selector that matches, use it; else fall back
 to the agent-provided selector verbatim and flag `resolved:false` box.
 
+## Meaningful, project-wise session names (added)
+- The agent passes a **meaningful** `sessionName` derived from project context:
+  `<repo-basename> · <git-branch> — QA <date>` (the "latest changes" context = the
+  current branch/feature the user is working on). `/mochi:design-qa` computes this
+  (it runs in the repo: `git rev-parse --abbrev-ref HEAD`, repo basename).
+- `browser_comment_add` finds-or-creates by `sessionName` for the origin, so re-running
+  QA on the same branch appends to the same session (idempotent by name).
+- **Browser-created sessions** also get a meaningful default name (not "Session N"):
+  the page's `document.title` (app name) — e.g. `"My App — review"` — falling back to the
+  origin host. Renameable as today.
+
+## Browser session selector (added)
+- A **prominent, always-visible current-session selector** in Comment Mode so the user can
+  pick the active session and comment into the **same** session the agent used.
+- Implementation: a **session pill** in the navigator header (and shown even when the
+  navigator is closed, as a small label above the FAB) showing the active session's name;
+  clicking it opens a compact **switcher dropdown** listing this origin's sessions (active
+  one checked) + "＋ New". Selecting one calls `switchSession` (active), so subsequent user
+  comments go into it. Keeps the existing Sessions view too.
+
 ## Comment Mode rendering (small additions)
 - **`severity`** — optional `low|medium|high`; tints the pin (grey/amber/red) and shows a
   chip in the list. Defaults to none (current blue).
