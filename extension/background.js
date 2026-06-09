@@ -48,6 +48,86 @@ chrome.storage.local.get(["notifEnabled", "notifVerified"]).then((o) => {
   if (typeof o.notifVerified === "boolean") notifPrefs.verified = o.notifVerified;
 }).catch(() => {});
 
+// ---------------- comment mode (standalone visual annotation) ----------------
+// Tabs that currently run a comment session — kept injected across navigation.
+// Persisted so the set survives service-worker eviction.
+const COMMENT_TABS_KEY = "mochiCommentTabs";
+const COMMENT_SESSION_KEY = "mochiCommentSession";
+const commentTabs = new Set();
+// Hydration is async on a cold service-worker boot; handlers await this before
+// trusting commentTabs so a toggle/status doesn't race an empty set.
+const commentTabsReady = chrome.storage.local.get([COMMENT_TABS_KEY]).then((o) => {
+  const arr = o && o[COMMENT_TABS_KEY];
+  if (Array.isArray(arr)) for (const id of arr) commentTabs.add(id);
+}).catch(() => {});
+function persistCommentTabs() {
+  try { chrome.storage.local.set({ [COMMENT_TABS_KEY]: [...commentTabs] }); } catch {}
+}
+async function setCommentActive(active) {
+  try {
+    const o = await chrome.storage.local.get([COMMENT_SESSION_KEY]);
+    const s = (o && o[COMMENT_SESSION_KEY]) || {};
+    s.active = active;
+    if (active && !s.startedAt) s.startedAt = Date.now();
+    if (!Array.isArray(s.comments)) s.comments = [];
+    await chrome.storage.local.set({ [COMMENT_SESSION_KEY]: s });
+  } catch {}
+}
+async function isCommentActive() {
+  try { const o = await chrome.storage.local.get([COMMENT_SESSION_KEY]); return !!(o && o[COMMENT_SESSION_KEY] && o[COMMENT_SESSION_KEY].active); } catch { return false; }
+}
+async function injectCommentMode(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["comment-mode.js"] });
+    return true;
+  } catch (e) {
+    try { console.warn("[mochi] comment-mode inject failed:", e?.message); } catch {}
+    return false;
+  }
+}
+async function startCommentSession(tabId) {
+  await commentTabsReady;
+  await setCommentActive(true);   // active before injecting so the script renders
+  commentTabs.add(tabId); persistCommentTabs();
+  return injectCommentMode(tabId);
+}
+// Stop ONE tab (or all when tabId is omitted). The global active flag is only
+// cleared once the last commenting tab is gone, so other tabs keep their overlay.
+async function stopCommentSession(tabId) {
+  await commentTabsReady;
+  const targets = tabId != null ? [tabId] : [...commentTabs];
+  for (const id of targets) {
+    try { await chrome.tabs.sendMessage(id, { type: "comment_teardown" }); } catch {}
+    commentTabs.delete(id);
+  }
+  persistCommentTabs();
+  if (commentTabs.size === 0) await setCommentActive(false);
+}
+async function unregisterCommentTab(tabId) {
+  await commentTabsReady;
+  if (commentTabs.delete(tabId)) persistCommentTabs();
+  if (commentTabs.size === 0) await setCommentActive(false);
+}
+// Re-inject comment mode after navigation/reload so the FAB + pins persist —
+// but only while the session is genuinely active.
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status !== "complete") return;
+  commentTabsReady.then(async () => {
+    if (!commentTabs.has(tabId)) return;
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (!t || !t.url || !/^https?:\/\//i.test(t.url)) return;
+    if (await isCommentActive()) injectCommentMode(tabId);
+  });
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (commentTabs.delete(tabId)) { persistCommentTabs(); if (commentTabs.size === 0) setCommentActive(false); }
+});
+// Tab IDs are not stable across a browser restart — drop the persisted set so
+// comment mode never force-injects into an unrelated restored tab.
+chrome.runtime.onStartup.addListener(() => {
+  commentTabs.clear(); persistCommentTabs(); setCommentActive(false);
+});
+
 // Post an OS notification for a session. Never raises the window — that only
 // happens if the user clicks (see chrome.notifications.onClicked below).
 // When notifications are off we just no-op: a toolbar badge would collide with
@@ -2904,7 +2984,7 @@ async function captureCroppedScreenshot({ tabId, rect, dpr }) {
   }
 }
 
-chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   (async () => {
     try {
       if (req?.type === "popup_status") {
@@ -2981,6 +3061,40 @@ chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
           ok = r.ok && body.ok !== false;
         } catch {}
         sendResponse({ ok });
+      } else if (req?.type === "popup_comment_status") {
+        await commentTabsReady;
+        let count = 0, active = false;
+        try {
+          let tab; try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); } catch {}
+          active = !!(tab && tab.id != null && commentTabs.has(tab.id));   // status for THIS tab
+          const o = await chrome.storage.local.get(["mochiCommentSession"]);
+          const s = o && o.mochiCommentSession;
+          count = (s && Array.isArray(s.comments)) ? s.comments.length : 0;
+        } catch {}
+        sendResponse({ active, count });
+      } else if (req?.type === "popup_start_comment_session") {
+        let tab;
+        try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); } catch {}
+        if (!tab || !tab.id) { sendResponse({ ok: false, error: "no active tab" }); return; }
+        if (tab.url && /^(chrome|edge|brave|chrome-extension|devtools|about|view-source):/i.test(tab.url)) {
+          sendResponse({ ok: false, error: "Can't run on this page (browser-internal). Open a normal website or your localhost app." });
+          return;
+        }
+        const ok = await startCommentSession(tab.id);
+        sendResponse({ ok });
+      } else if (req?.type === "popup_stop_comment_session") {
+        // Stop the focused tab's session (per-tab).
+        let tab; try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); } catch {}
+        if (tab && tab.id != null) await stopCommentSession(tab.id);
+        else await stopCommentSession();
+        sendResponse({ ok: true });
+      } else if (req?.type === "comment_register_tab") {
+        await commentTabsReady;
+        if (sender?.tab?.id != null) { commentTabs.add(sender.tab.id); persistCommentTabs(); }
+        sendResponse({ ok: true });
+      } else if (req?.type === "comment_unregister_tab") {
+        if (sender?.tab?.id != null) await unregisterCommentTab(sender.tab.id);
+        sendResponse({ ok: true });
       } else if (req?.type === "popup_send_claude_message") {
         const sessionId = req.sessionId;
         const message = String(req.message ?? "").trim();
@@ -3067,14 +3181,21 @@ chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
 // Injects mochi-modal.js into the active tab via chrome.scripting; the
 // modal lives in a shadow-DOM container so it doesn't inherit page styles.
 chrome.commands.onCommand.addListener(async (cmd) => {
-  if (cmd !== "open-send-hint-modal") return;
+  if (cmd !== "open-send-hint-modal" && cmd !== "toggle-comment-mode") return;
   let tab;
   try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); } catch {}
   if (!tab || !tab.id) return;
   // chrome:// and similar are restricted — don't try to inject.
-  if (tab.url && /^(chrome|edge|brave|chrome-extension|devtools|about):/i.test(tab.url)) {
+  if (tab.url && /^(chrome|edge|brave|chrome-extension|devtools|about|view-source):/i.test(tab.url)) {
     try { chrome.action.setBadgeText({ text: "!", tabId: tab.id }); } catch {}
     setTimeout(() => { try { chrome.action.setBadgeText({ text: "", tabId: tab.id }); } catch {} }, 1500);
+    return;
+  }
+  if (cmd === "toggle-comment-mode") {
+    // Toggle THIS tab only (await hydration so a cold-boot set isn't empty).
+    await commentTabsReady;
+    if (commentTabs.has(tab.id)) { await stopCommentSession(tab.id); }
+    else { await startCommentSession(tab.id); }
     return;
   }
   try {

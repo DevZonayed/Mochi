@@ -8,6 +8,31 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.0] — 2026-06-07
+
+### Added
+
+- **Comment Mode — standalone visual annotation → agent-ready brief.** One click
+  (**💬 Comment mode** in the popup, no Claude session required) drops a floating
+  bubble on any page. Click an element to leave a numbered, anchored comment;
+  scrolling stays free (with a one-time scroll hint). Comments persist across
+  pages/reloads (`chrome.storage`), grouped by route in an iOS-style list, and
+  sync across tabs. A **Responsive** device-frame lets you comment at common
+  breakpoints. **Copy brief** exports markdown (selector + route + breakpoint +
+  element + note) to paste into any coding agent. New content script
+  `extension/comment-mode.js`; background re-injects on navigation; SPA route
+  changes are detected (history patch + popstate/hashchange). Verified
+  end-to-end in a real browser, then hardened against an adversarial review
+  (14 findings fixed: cross-tab sync, listener-leak-free teardown, per-tab
+  stop, hydration-race + stale-tab-id guards, sandboxed responsive iframe).
+  No new MCP tools (browser count stays 61).
+- **WhatsApp comms MCP** (from the parallel comms work merged here): a separate
+  `comms` MCP server (`server/dist/comms.bundle.mjs`) with WhatsApp messaging
+  tools, plus continuum comms recall/scoring. See the comms modules under
+  `server/src/comms/` and `plugins/continuum/lib/comms_*`.
+
+---
+
 ## [0.6.1] — 2026-06-07
 
 ### Changed
