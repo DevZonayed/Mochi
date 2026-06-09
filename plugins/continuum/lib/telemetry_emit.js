@@ -9,14 +9,31 @@
 //   Re-reads config + env, gates on isSharingEnabled. If disabled → ZERO POST.
 //
 // SENT-WATERMARK (dedup guard):
-//   flush() persists the identity of the last-attempted event (ts+sid) in
-//   flush-watermark.json so that consecutive flushes only POST genuinely new
-//   events. Using an event-identity anchor (rather than a raw line offset)
-//   makes the watermark stable across pruneEvents() rewrites: even after
-//   events.jsonl is compacted, we can still find the last-sent event by its
-//   ts+sid and slice correctly. If the anchor event is no longer present after
-//   a prune (it aged out or was dropped), we fall back to sending everything
-//   (safe — server deduplicates by event identity).
+//   flush() persists the identity of the last-attempted event (ts+sid) AND the
+//   absolute count of events attempted (flushedCount) in flush-watermark.json so
+//   that consecutive flushes only POST genuinely new events.
+//
+//   resolveWatermarkOffset uses a two-step strategy to handle the ts:sid collision
+//   case (two or more events with identical ts AND sid — realistic for rapid
+//   Read/Grep/click bursts within the same second):
+//
+//     1. FAST PATH: if allEvents[flushedCount-1] matches lastKey, the count
+//        unambiguously identifies the exact anchor position even when multiple
+//        events share the same ts:sid.  Returns flushedCount directly (O(1)).
+//
+//     2. PRUNE FALLBACK: if flushedCount points past the end or the key there
+//        does not match (pruneEvents() rewrote the file), search backwards from
+//        min(flushedCount-1, length-1) for the first match — this still produces
+//        a correct slice in the no-collision case, and for the collision case the
+//        anchor is searched from the right position in the post-prune file.
+//        If no match is found at all, fall back to 0 (send all; server dedupes).
+//
+//   Using an event-identity anchor (rather than a raw line offset) makes the
+//   watermark stable across pruneEvents() rewrites: even after events.jsonl is
+//   compacted, we can still find the last-sent event by its ts+sid and slice
+//   correctly. If the anchor event is no longer present after a prune (it aged
+//   out or was dropped), we fall back to sending everything (safe — server
+//   deduplicates by event identity).
 //   The watermark advances past ALL fresh events that were ATTEMPTED — including
 //   those whose POST failed. Failed batches are placed in the retry queue instead;
 //   this prevents double-sending (once as fresh + once as queued) on the next flush.
@@ -34,8 +51,9 @@ export const MAX_BATCH_EVENTS = 500;   // cap a single POST body
 
 // eventKey — a stable per-event identity string built from ts + sid.
 // pruneEvents() may rewrite events.jsonl dropping old events, so we cannot use
-// a raw line offset as an anchor.  ts+sid is unique enough in practice
-// (same session, same second is essentially impossible for Zone-A tool events).
+// a raw line offset as an anchor. The key is used alongside flushedCount (the
+// absolute event count at flush time) to disambiguate collisions where multiple
+// events share the same ts AND sid (e.g. rapid bursts within a single second).
 function eventKey(ev) {
   return (ev && ev.ts != null && ev.sid != null) ? `${ev.ts}:${ev.sid}` : null;
 }
@@ -43,8 +61,9 @@ function eventKey(ev) {
 // readWatermark — returns the { lastKey, flushedCount } persisted by the
 // last flush, or { lastKey: null, flushedCount: 0 } when absent/corrupt.
 // `lastKey`     — ts:sid of the last event that was included in an attempted flush.
-// `flushedCount`— how many events were in events.jsonl at the time of that flush.
-//                 Used only as a fast-path hint; correctness falls back to lastKey.
+// `flushedCount`— ABSOLUTE number of events that had been attempted at watermark
+//                 write time. Used as the primary position anchor; lastKey is the
+//                 collision-safe confirmation check and prune-fallback key.
 // Legacy files that only have `flushedLines` (pre-identity watermark) are
 // treated as absent so the next flush re-sends everything (safe; server dedupes).
 function readWatermark(projectDir) {
@@ -67,12 +86,35 @@ function writeWatermark(projectDir, lastKey, flushedCount) {
 }
 
 // resolveWatermarkOffset — find the index AFTER the last-sent event in allEvents.
-// If the event is no longer present (pruned away), returns 0 (re-send all; server
-// will dedup via event identity). If no watermark exists, also returns 0.
+// Uses a two-step strategy to correctly handle ts:sid collisions:
+//
+//   FAST PATH: allEvents[flushedCount-1] is the exact anchor when its key matches
+//   lastKey. This is O(1) and correctly handles the collision case where multiple
+//   events share the same ts:sid — the count pin-points the right occurrence.
+//
+//   PRUNE FALLBACK: when flushedCount overshoots the post-prune array length, or
+//   the key there doesn't match (a different event now occupies that slot after a
+//   prune rewrite), search backward from min(flushedCount-1, length-1) for the
+//   last matching key. This covers the prune-offset scenario. If no match is
+//   found (anchor was pruned out entirely), fall back to 0 (re-send all; safe,
+//   server deduplicates by event identity).
 function resolveWatermarkOffset(allEvents, watermark) {
   if (!watermark.lastKey) return 0;
-  // Search from the end — the anchor event is near the tail.
-  for (let i = allEvents.length - 1; i >= 0; i--) {
+  const len = allEvents.length;
+
+  // Fast path: flushedCount is the absolute event count written at watermark time.
+  // allEvents[flushedCount-1] is the anchor event when present and key-matching.
+  const pinIdx = watermark.flushedCount - 1;
+  if (pinIdx >= 0 && pinIdx < len && eventKey(allEvents[pinIdx]) === watermark.lastKey) {
+    return watermark.flushedCount; // exact, O(1)
+  }
+
+  // Prune fallback: search backward from min(pinIdx, last) for the anchor key.
+  // For the no-collision case this finds the correct single occurrence.
+  // For the post-prune case the file is shorter and the anchor may be at a
+  // different absolute index — still the rightmost match is the right anchor.
+  const startIdx = Math.min(pinIdx >= 0 ? pinIdx : len - 1, len - 1);
+  for (let i = startIdx; i >= 0; i--) {
     if (eventKey(allEvents[i]) === watermark.lastKey) {
       return i + 1; // slice from the event AFTER the anchor
     }

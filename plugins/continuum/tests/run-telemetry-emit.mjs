@@ -274,6 +274,43 @@ try {
   ok("watermark survives pruneEvents() rewrite: post-prune new events not skipped, old events not re-sent");
 } catch (e) { bad("watermark survives pruneEvents() rewrite (prune-offset regression)", e); }
 
+// E13: WATERMARK ts:sid COLLISION — two events with identical ts AND sid straddle
+// a flush boundary. flush1 sends the first occurrence; flush2 must send the two
+// new occurrences (same ts+sid), not skip them forever (the bug: tail-search from
+// the end found the LAST duplicate so offset advanced past the genuine new events).
+try {
+  const dir = tmpRepo();
+  writeConfig(dir, { decided: true, share: true, killSwitch: "on", iid: "iid-coll" });
+
+  // flush1: one event {ts:100, sid:"s1"}. Use a very small ts to make collisions
+  // unambiguous — all three events share exactly the same ts+sid.
+  const EV_COLL = { ...EV, ts: 100, sid: "s1", tool: "browser_click" };
+  writeEvents(dir, [EV_COLL]);
+  const f1 = mockFetch({ status: 200 });
+  const r1 = await flush(dir, {}, { fetch: f1 });
+  assert.equal(f1.calls.length, 1, "E13 flush1: one POST");
+  assert.equal(JSON.parse(f1.calls[0].opts.body).batch.length, 1, "E13 flush1: 1 event");
+  assert.equal(r1.sent, 1, "E13 flush1: sent=1");
+
+  // Append two more events with the SAME ts AND sid — realistic for rapid burst
+  // within a single second on the same session.
+  const EV_COLL2 = { ...EV_COLL, tool: "browser_type" };
+  const EV_COLL3 = { ...EV_COLL, tool: "browser_navigate" };
+  fs.appendFileSync(telemetryEventsPath(dir), JSON.stringify(EV_COLL2) + "\n");
+  fs.appendFileSync(telemetryEventsPath(dir), JSON.stringify(EV_COLL3) + "\n");
+
+  // flush2: must send BOTH new events — not zero (the collision bug).
+  const f2 = mockFetch({ status: 200 });
+  const r2 = await flush(dir, {}, { fetch: f2 });
+  assert.equal(f2.calls.length, 1, "E13 flush2: one POST (new events not skipped)");
+  const body2 = JSON.parse(f2.calls[0].opts.body);
+  assert.equal(body2.batch.length, 2, "E13 flush2: 2 new events sent (ts:sid collision handled)");
+  assert.equal(body2.batch[0].tool, "browser_type",    "E13 flush2: first  new event correct");
+  assert.equal(body2.batch[1].tool, "browser_navigate","E13 flush2: second new event correct");
+  assert.equal(r2.sent, 1, "E13 flush2: sent=1");
+  ok("watermark ts:sid collision: same-second same-session events after flush not silently dropped");
+} catch (e) { bad("watermark ts:sid collision: same-second same-session events not dropped", e); }
+
 console.log("─────────────────────────────");
 console.log("passed:", pass); console.log("failed:", fail);
 process.exit(fail === 0 ? 0 : 1);
