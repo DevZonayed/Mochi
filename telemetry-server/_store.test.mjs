@@ -1,0 +1,80 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { dayBucket, eventsPath, appendEvents, readAllEvents, sweepRetention, eraseIid } from "./store.mjs";
+
+function tmp() { return fs.mkdtempSync(path.join(os.tmpdir(), "tele-store-")); }
+
+test("dayBucket converts epoch-seconds ts to YYYY-MM-DD (UTC)", () => {
+  assert.equal(dayBucket(1717900000), "2024-06-09");
+});
+
+test("appendEvents writes one JSONL line per event to /data/events/<day>.jsonl", () => {
+  const dir = tmp();
+  appendEvents(dir, [{ ts: 1717900000, tool: "Read" }, { ts: 1717900001, tool: "Edit" }]);
+  const p = eventsPath(dir, "2024-06-09");
+  const lines = fs.readFileSync(p, "utf8").split("\n").filter(Boolean);
+  assert.equal(lines.length, 2);
+  assert.equal(JSON.parse(lines[0]).tool, "Read");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("appendEvents day-buckets by each event's own ts (cross-midnight)", () => {
+  const dir = tmp();
+  appendEvents(dir, [{ ts: 1717900000, tool: "A" }, { ts: 1718000000, tool: "B" }]);
+  assert.ok(fs.existsSync(eventsPath(dir, "2024-06-09")));
+  assert.ok(fs.existsSync(eventsPath(dir, "2024-06-10")));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("readAllEvents reads every day-file back as parsed objects", () => {
+  const dir = tmp();
+  appendEvents(dir, [{ ts: 1717900000, tool: "A" }, { ts: 1718000000, tool: "B" }]);
+  const all = readAllEvents(dir);
+  assert.equal(all.length, 2);
+  assert.deepEqual(all.map((e) => e.tool).sort(), ["A", "B"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("sweepRetention deletes day-files older than RETENTION_DAYS", () => {
+  const dir = tmp();
+  const evDir = path.join(dir, "events");
+  fs.mkdirSync(evDir, { recursive: true });
+  fs.writeFileSync(path.join(evDir, "2000-01-01.jsonl"), "{}\n");
+  const today = dayBucket(Math.floor(Date.now() / 1000));
+  fs.writeFileSync(path.join(evDir, `${today}.jsonl`), "{}\n");
+  const removed = sweepRetention(dir, 180, Date.now());
+  assert.ok(removed.includes("2000-01-01.jsonl"));
+  assert.ok(!fs.existsSync(path.join(evDir, "2000-01-01.jsonl")));
+  assert.ok(fs.existsSync(path.join(evDir, `${today}.jsonl`)));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("sweepRetention drops iid after the dedup window (keeps aggregate fields)", () => {
+  const dir = tmp();
+  const oldTs = Math.floor(Date.now() / 1000) - 60 * 60 * 24 * 30;
+  const day = dayBucket(oldTs);
+  appendEvents(dir, [{ ts: oldTs, iid: "i-secret", tool: "Read", mcp: "", ok: true }]);
+  sweepRetention(dir, 180, Date.now(), { dedupWindowDays: 7 });
+  const lines = fs.readFileSync(eventsPath(dir, day), "utf8").split("\n").filter(Boolean);
+  const ev = JSON.parse(lines[0]);
+  assert.ok(!("iid" in ev) || ev.iid === "", "iid dropped after dedup window");
+  assert.equal(ev.tool, "Read", "aggregate fields preserved");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("eraseIid removes every stored event for an iid (GDPR erasure), returns count", () => {
+  const dir = tmp();
+  appendEvents(dir, [
+    { ts: 1717900000, iid: "i-erase", tool: "A" },
+    { ts: 1717900001, iid: "i-keep", tool: "B" },
+    { ts: 1718000000, iid: "i-erase", tool: "C" },
+  ]);
+  const removed = eraseIid(dir, "i-erase");
+  assert.equal(removed, 2);
+  const left = readAllEvents(dir);
+  assert.deepEqual(left.map((e) => e.iid), ["i-keep"]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
