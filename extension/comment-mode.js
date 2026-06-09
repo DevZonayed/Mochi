@@ -1,6 +1,8 @@
 // Mochi Comment Mode — standalone in-page visual annotation.
 //
-// Injected on demand (popup "Comment mode" / ⌘⇧C). Needs NO Claude session.
+// Injected on demand from the popup's "Comment mode" button (or an optional
+// keyboard shortcut the user assigns at chrome://extensions/shortcuts).
+// Needs NO Claude session.
 // The user drops numbered comments on elements across pages + breakpoints, then
 // "Copy brief" exports an agent-ready markdown blob to paste into any coding
 // agent. Lives in a closed shadow DOM so the host page can't style or see it.
@@ -27,29 +29,36 @@
   const routeOf = (loc = location) => (loc.pathname || "/") + (loc.search || "");
   const originOf = (loc = location) => loc.origin;
 
+  let lastWriteJson = null;
+  function applySession(s) {
+    if (s && typeof s === "object") {
+      session = {
+        active: s.active !== false,
+        startedAt: s.startedAt || Date.now(),
+        taughtScroll: !!s.taughtScroll,
+        comments: Array.isArray(s.comments) ? s.comments : [],
+      };
+    }
+  }
   function loadSession() {
     return new Promise((resolve) => {
       try {
-        chrome.storage.local.get([SKEY], (o) => {
-          const s = o && o[SKEY];
-          if (s && typeof s === "object") {
-            session = {
-              active: s.active !== false,
-              startedAt: s.startedAt || Date.now(),
-              taughtScroll: !!s.taughtScroll,
-              comments: Array.isArray(s.comments) ? s.comments : [],
-            };
-          }
-          resolve(session);
-        });
+        chrome.storage.local.get([SKEY], (o) => { applySession(o && o[SKEY]); resolve(session); });
       } catch { resolve(session); }
     });
+  }
+  function serializeSession() {
+    return { active: session.active, startedAt: session.startedAt, taughtScroll: session.taughtScroll, comments: session.comments };
   }
   function saveSession() {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
-      try { chrome.storage.local.set({ [SKEY]: session }); } catch {}
+      try {
+        const out = serializeSession();
+        lastWriteJson = JSON.stringify(out);
+        chrome.storage.local.set({ [SKEY]: out });
+      } catch {}
     }, 120);
   }
   function maxN() { return session.comments.reduce((m, c) => Math.max(m, c.n || 0), 0); }
@@ -290,12 +299,13 @@
     startPick(topPickTarget());             // one click → start commenting
   });
   menuToggle.addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(); });
-  // Click anywhere outside the FAB closes the menu.
-  document.addEventListener("click", (e) => {
+  // Click anywhere outside the FAB closes the menu. (Named so teardown can detach it.)
+  function onDocClickCloseMenu(e) {
     if (!menuOpen) return;
     if (e.target === host || host.contains(e.target)) return;
     toggleMenu(false);
-  }, true);
+  }
+  document.addEventListener("click", onDocClickCloseMenu, true);
 
   menu.addEventListener("click", (e) => {
     const b = e.target.closest(".mbtn"); if (!b) return;
@@ -326,7 +336,10 @@
     layer.appendChild(topbarEl);
     target.doc.addEventListener("mousemove", onMove, true);
     target.doc.addEventListener("click", onPick, true);
+    // Bind Esc on BOTH the top document and the target doc — keydown inside an
+    // iframe doesn't cross the frame boundary to the parent.
     document.addEventListener("keydown", onPickKey, true);
+    if (target.doc !== document) { try { target.doc.addEventListener("keydown", onPickKey, true); } catch {} }
   }
   function stopPick() {
     const t = pickCtx; pickCtx = null;
@@ -334,6 +347,7 @@
     try { t && t.doc.removeEventListener("mousemove", onMove, true); } catch {}
     try { t && t.doc.removeEventListener("click", onPick, true); } catch {}
     document.removeEventListener("keydown", onPickKey, true);
+    try { t && t.doc !== document && t.doc.removeEventListener("keydown", onPickKey, true); } catch {}
     try { hlEl?.remove(); } catch {} try { topbarEl?.remove(); } catch {}
     hlEl = topbarEl = null;
   }
@@ -566,7 +580,7 @@
         <button class="mbtn" data-x="close" style="pointer-events:auto;">Done</button>
       </div>
       <div class="dstage">
-        <div class="framewrap"><iframe title="Mochi responsive preview"></iframe><div class="doverlay"></div></div>
+        <div class="framewrap"><iframe title="Mochi responsive preview" sandbox="allow-same-origin allow-scripts allow-forms allow-popups"></iframe><div class="doverlay"></div></div>
       </div>`;
     layer.appendChild(d);
     devState.el = d;
@@ -649,7 +663,13 @@
       if (!el) {
         el = document.createElement("div"); el.className = "pin"; el.dataset.id = c.id; el.textContent = c.n; el.style.pointerEvents = "auto";
         el.title = c.text;
-        el.addEventListener("click", (ev) => { ev.stopPropagation(); if (node) openPop(node, devTarget(), c); });
+        // Re-resolve the node at click time (the one captured at creation may be
+        // null if async content hadn't rendered yet).
+        el.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          let n = null; try { n = devState.iframe.contentDocument.querySelector(c.selector); } catch {}
+          if (n) openPop(n, devTarget(), c); else toast("Element not found in frame");
+        });
         devState.overlay.appendChild(el);
       }
       if (node) {
@@ -708,9 +728,57 @@
     toast(ok ? `Copied ${session.comments.length} comments — paste into your coding agent` : "Copy failed — clipboard blocked");
   }
 
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
   // ------------------------------------------------------------- lifecycle ----
+  // SPA route detection: history is patched + popstate/hashchange listened so
+  // pins re-render when a client-side router changes the URL (no full reload).
+  let lastRoute = routeOf();
+  let histPatched = false, origPush = null, origReplace = null;
+  function handleRouteChange() {
+    const r = routeOf();
+    if (r === lastRoute) return;
+    lastRoute = r;
+    closePop();
+    renderPins();
+    if (devState.open) renderDevPins();
+    if (panelEl) renderPanel();
+  }
+  function onPopState() { handleRouteChange(); }
+  function patchHistory() {
+    if (histPatched) return; histPatched = true;
+    try {
+      origPush = history.pushState; origReplace = history.replaceState;
+      history.pushState = function (...a) { const r = origPush.apply(this, a); try { handleRouteChange(); } catch {} return r; };
+      history.replaceState = function (...a) { const r = origReplace.apply(this, a); try { handleRouteChange(); } catch {} return r; };
+    } catch {}
+    window.addEventListener("popstate", onPopState, true);
+    window.addEventListener("hashchange", onPopState, true);
+  }
+  function unpatchHistory() {
+    if (!histPatched) return; histPatched = false;
+    try { if (origPush) history.pushState = origPush; if (origReplace) history.replaceState = origReplace; } catch {}
+    window.removeEventListener("popstate", onPopState, true);
+    window.removeEventListener("hashchange", onPopState, true);
+  }
+
+  // Background tells us to tear down (popup/keyboard "Stop").
+  function onRuntimeMessage(req) { if (req && req.type === "comment_teardown") teardown(); }
+  // Cross-tab sync: adopt another context's write to the shared session.
+  function onStorageChanged(changes, area) {
+    if (area !== "local" || !changes[SKEY]) return;
+    const nv = changes[SKEY].newValue;
+    if (!nv) { teardown(); return; }
+    const j = JSON.stringify({ active: nv.active, startedAt: nv.startedAt, taughtScroll: nv.taughtScroll, comments: nv.comments });
+    if (j === lastWriteJson) return;   // our own write — ignore
+    applySession(nv);
+    if (!session.active) { teardown(); return; }
+    updateCounts(); renderPins(); if (devState.open) renderDevPins(); if (panelEl) renderPanel();
+  }
+
+  // End only THIS tab. Background flips the global active flag when the last
+  // commenting tab unregisters, so other tabs keep their overlay.
   async function endSession() {
-    session.active = false; saveSession();
     try { chrome.runtime.sendMessage({ type: "comment_unregister_tab" }); } catch {}
     teardown();
   }
@@ -718,34 +786,41 @@
     try { stopPick(); } catch {} try { closeDevice(); } catch {}
     window.removeEventListener("scroll", scheduleReposition, true);
     window.removeEventListener("resize", scheduleReposition, true);
+    try { document.removeEventListener("click", onDocClickCloseMenu, true); } catch {}
+    try { chrome.runtime.onMessage.removeListener(onRuntimeMessage); } catch {}
+    try { chrome.storage.onChanged.removeListener(onStorageChanged); } catch {}
+    unpatchHistory();
+    try { window.__mochiCommentResync = null; } catch {}
     try { host.remove(); } catch {}
   }
 
-  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
-
-  // Background can tell us to tear down (popup "Stop").
-  try {
-    chrome.runtime.onMessage.addListener((req) => {
-      if (req && req.type === "comment_teardown") { session.active = false; teardown(); }
+  // Resync hook for the re-injection guard (host already present).
+  window.__mochiCommentResync = () => {
+    loadSession().then(() => {
+      if (!session.active) { teardown(); return; }
+      lastRoute = routeOf();
+      updateCounts(); renderPins(); if (devState.open) renderDevPins();
     });
-  } catch {}
-
-  // Resync hook for re-injection guard.
-  window.__mochiCommentResync = () => { loadSession().then(() => { updateCounts(); renderPins(); }); };
+  };
 
   // ------------------------------------------------------------- bootstrap ----
   (async () => {
     await loadSession();
     if (!session.active) { teardown(); return; }
     try { chrome.runtime.sendMessage({ type: "comment_register_tab" }); } catch {}
+    try { chrome.runtime.onMessage.addListener(onRuntimeMessage); } catch {}
+    try { chrome.storage.onChanged.addListener(onStorageChanged); } catch {}
+    lastRoute = routeOf();
+    patchHistory();
     updateCounts();
     renderPins();
     maybeTeachScroll();
-    // continuous light reposition (covers layout shifts from async content)
+    // Safety net: covers async layout shifts AND client-side route changes that
+    // slipped past the history patch.
     let tick = 0;
     const loop = () => {
       if (!document.getElementById(HOST_ID)) return;
-      if (++tick % 30 === 0) positionPins();   // ~ every 0.5s as a safety net
+      if (++tick % 20 === 0) { handleRouteChange(); positionPins(); if (devState.open) positionDevPins(); }
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
