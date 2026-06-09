@@ -48,6 +48,64 @@ chrome.storage.local.get(["notifEnabled", "notifVerified"]).then((o) => {
   if (typeof o.notifVerified === "boolean") notifPrefs.verified = o.notifVerified;
 }).catch(() => {});
 
+// ---------------- comment mode (standalone visual annotation) ----------------
+// Tabs that currently run a comment session — kept injected across navigation.
+// Persisted so the set survives service-worker eviction.
+const COMMENT_TABS_KEY = "mochiCommentTabs";
+const commentTabs = new Set();
+chrome.storage.local.get([COMMENT_TABS_KEY]).then((o) => {
+  const arr = o && o[COMMENT_TABS_KEY];
+  if (Array.isArray(arr)) for (const id of arr) commentTabs.add(id);
+}).catch(() => {});
+function persistCommentTabs() {
+  try { chrome.storage.local.set({ [COMMENT_TABS_KEY]: [...commentTabs] }); } catch {}
+}
+async function injectCommentMode(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["comment-mode.js"] });
+    return true;
+  } catch (e) {
+    try { console.warn("[mochi] comment-mode inject failed:", e?.message); } catch {}
+    return false;
+  }
+}
+async function startCommentSession(tabId) {
+  // Mark the session active before injecting so the content script renders.
+  try {
+    const o = await chrome.storage.local.get(["mochiCommentSession"]);
+    const s = (o && o.mochiCommentSession) || {};
+    s.active = true;
+    if (!s.startedAt) s.startedAt = Date.now();
+    if (!Array.isArray(s.comments)) s.comments = [];
+    await chrome.storage.local.set({ mochiCommentSession: s });
+  } catch {}
+  commentTabs.add(tabId); persistCommentTabs();
+  return injectCommentMode(tabId);
+}
+async function stopCommentSession() {
+  try {
+    const o = await chrome.storage.local.get(["mochiCommentSession"]);
+    const s = (o && o.mochiCommentSession) || {};
+    s.active = false;
+    await chrome.storage.local.set({ mochiCommentSession: s });
+  } catch {}
+  for (const id of [...commentTabs]) {
+    try { await chrome.tabs.sendMessage(id, { type: "comment_teardown" }); } catch {}
+  }
+  commentTabs.clear(); persistCommentTabs();
+}
+// Re-inject comment mode after a navigation/reload so the FAB + pins persist.
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status !== "complete") return;
+  if (!commentTabs.has(tabId)) return;
+  chrome.tabs.get(tabId).then((t) => {
+    if (t && t.url && /^https?:\/\//i.test(t.url)) injectCommentMode(tabId);
+  }).catch(() => {});
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (commentTabs.delete(tabId)) persistCommentTabs();
+});
+
 // Post an OS notification for a session. Never raises the window — that only
 // happens if the user clicks (see chrome.notifications.onClicked below).
 // When notifications are off we just no-op: a toolbar badge would collide with
@@ -2904,7 +2962,7 @@ async function captureCroppedScreenshot({ tabId, rect, dpr }) {
   }
 }
 
-chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   (async () => {
     try {
       if (req?.type === "popup_status") {
@@ -2981,6 +3039,33 @@ chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
           ok = r.ok && body.ok !== false;
         } catch {}
         sendResponse({ ok });
+      } else if (req?.type === "popup_comment_status") {
+        let count = 0, active = false;
+        try {
+          const o = await chrome.storage.local.get(["mochiCommentSession"]);
+          const s = o && o.mochiCommentSession;
+          if (s) { active = s.active !== false && commentTabs.size > 0; count = Array.isArray(s.comments) ? s.comments.length : 0; }
+        } catch {}
+        sendResponse({ active, count });
+      } else if (req?.type === "popup_start_comment_session") {
+        let tab;
+        try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); } catch {}
+        if (!tab || !tab.id) { sendResponse({ ok: false, error: "no active tab" }); return; }
+        if (tab.url && /^(chrome|edge|brave|chrome-extension|devtools|about|view-source):/i.test(tab.url)) {
+          sendResponse({ ok: false, error: "Can't run on this page (browser-internal). Open a normal website or your localhost app." });
+          return;
+        }
+        const ok = await startCommentSession(tab.id);
+        sendResponse({ ok });
+      } else if (req?.type === "popup_stop_comment_session") {
+        await stopCommentSession();
+        sendResponse({ ok: true });
+      } else if (req?.type === "comment_register_tab") {
+        if (sender?.tab?.id != null) { commentTabs.add(sender.tab.id); persistCommentTabs(); }
+        sendResponse({ ok: true });
+      } else if (req?.type === "comment_unregister_tab") {
+        if (sender?.tab?.id != null) { commentTabs.delete(sender.tab.id); persistCommentTabs(); }
+        sendResponse({ ok: true });
       } else if (req?.type === "popup_send_claude_message") {
         const sessionId = req.sessionId;
         const message = String(req.message ?? "").trim();
@@ -3067,14 +3152,20 @@ chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
 // Injects mochi-modal.js into the active tab via chrome.scripting; the
 // modal lives in a shadow-DOM container so it doesn't inherit page styles.
 chrome.commands.onCommand.addListener(async (cmd) => {
-  if (cmd !== "open-send-hint-modal") return;
+  if (cmd !== "open-send-hint-modal" && cmd !== "toggle-comment-mode") return;
   let tab;
   try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); } catch {}
   if (!tab || !tab.id) return;
   // chrome:// and similar are restricted — don't try to inject.
-  if (tab.url && /^(chrome|edge|brave|chrome-extension|devtools|about):/i.test(tab.url)) {
+  if (tab.url && /^(chrome|edge|brave|chrome-extension|devtools|about|view-source):/i.test(tab.url)) {
     try { chrome.action.setBadgeText({ text: "!", tabId: tab.id }); } catch {}
     setTimeout(() => { try { chrome.action.setBadgeText({ text: "", tabId: tab.id }); } catch {} }, 1500);
+    return;
+  }
+  if (cmd === "toggle-comment-mode") {
+    // Toggle: if this tab already has a session, end it; else start one.
+    if (commentTabs.has(tab.id)) { await stopCommentSession(); }
+    else { await startCommentSession(tab.id); }
     return;
   }
   try {
