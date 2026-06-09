@@ -164,7 +164,16 @@ export function buildServer({ registry, env = process.env } = {}) {
         }
         case "comms_sync_now": {
           const p = providerFor(args.provider, projectDir);
-          await p.connect?.(args.accountId, {});
+          // Double-wire guard: connect() opens a NEW socket and (re-)wires the
+          // messages.upsert / messaging-history.set / connection.update handlers
+          // every time. Calling it on an account that is already connected leaks a
+          // second live socket AND double-captures every incoming message (two
+          // _capture calls per upsert). If the provider already reports the account
+          // as connected, reuse the live socket — do NOT re-connect. Only connect
+          // when the account is not currently connected (needs_login / logged_out).
+          if (p.status(args.accountId) !== "connected") {
+            await p.connect?.(args.accountId, {});
+          }
           const status = p.status(args.accountId);
           try { setAccountStatus(projectDir, args.provider, args.accountId, status); } catch {}
           return ok({ status });

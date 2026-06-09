@@ -8,7 +8,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  commsChatDir,
   commsMessagesPath,
   commsCursorPath,
   commsMetaPath,
@@ -58,7 +57,7 @@ function readAllMessages(projectDir, provider, accountId, chatId) {
 }
 
 // exported so later tasks (append/getSlice) and tests can share it.
-export { readAllMessages, atomicWrite, commsChatDir };
+export { readAllMessages, atomicWrite };
 
 // updateChatMeta: create/refresh the per-chat meta.json so listChats() returns
 // real name/chatKind instead of null/null. Called on every append (cheap — one
