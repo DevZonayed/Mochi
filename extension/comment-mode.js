@@ -68,9 +68,14 @@
       } catch {}
     }, 120);
   }
-  function maxN() { return session.comments.reduce((m, c) => Math.max(m, c.n || 0), 0); }
+  // Numbering is per-site so each site's comments start at #1.
+  function maxN() { return currentComments().reduce((m, c) => Math.max(m, c.n || 0), 0); }
+  // All comments belong to the current SITE (origin). Pins/list/count/export are
+  // scoped to this so a session on another site never shows/copies another
+  // site's comments. (Storage keeps every site's comments, isolated by origin.)
+  function currentComments() { return session.comments.filter((c) => c.origin === originOf()); }
   function commentsForRoute(route) {
-    return session.comments.filter((c) => c.route === route && c.origin === originOf());
+    return currentComments().filter((c) => c.route === route);
   }
 
   // --------------------------------------------------------- selector gen ----
@@ -290,7 +295,7 @@
   const menuToggle = fabWrap.querySelector(".menu-toggle");
 
   function updateCounts() {
-    const n = session.comments.length;
+    const n = currentComments().length;   // count for THIS site only
     root.querySelectorAll("[data-count]").forEach((e) => { e.textContent = String(n); e.style.display = n ? "" : "none"; });
   }
 
@@ -550,29 +555,38 @@
       <div class="hd"><div><div class="t">Comments</div><div class="s"></div></div>
         <button class="btn" data-x="close">Close</button></div>
       <div class="body"></div>
-      <div class="ft"><button class="btn primary" data-x="copy">Copy brief</button><button class="btn danger" data-x="clear">Clear all</button></div>`;
+      <div class="ft"><button class="btn primary" data-x="copy">Copy brief</button><button class="btn danger" data-x="clear">Clear (this site)</button></div>`;
     layer.appendChild(panelEl);
     panelEl.addEventListener("click", (e) => {
       const b = e.target.closest("[data-x]"); if (!b) return;
       if (b.dataset.x === "close") closePanel();
       else if (b.dataset.x === "copy") copyBrief();
-      else if (b.dataset.x === "clear") { if (confirmClear()) { session.comments = []; saveSession(); updateCounts(); renderPins(); renderPanel(); toast("Cleared"); } }
+      else if (b.dataset.x === "clear") {
+        if (confirmClear()) {
+          // Remove only THIS site's comments; other sites stay intact.
+          session.comments = session.comments.filter((c) => c.origin !== originOf());
+          saveSession(); updateCounts(); renderPins(); renderPanel();
+          if (devState.open) renderDevPins();
+          toast("Cleared this site's comments");
+        }
+      }
     });
   }
   let clearArmed = false;
   function confirmClear() {
     if (clearArmed) { clearArmed = false; return true; }
-    clearArmed = true; toast("Tap Clear all again to confirm");
+    clearArmed = true; toast("Tap again to confirm clearing this site");
     setTimeout(() => { clearArmed = false; }, 2500);
     return false;
   }
   function renderPanel() {
     if (!panelEl) return;
     const body = panelEl.querySelector(".body");
-    panelEl.querySelector(".s").textContent = `${session.comments.length} across ${new Set(session.comments.map((c) => c.route)).size} page(s)`;
-    if (!session.comments.length) { body.innerHTML = `<div class="empty">No comments yet.<br/>Tap the bubble, then click any element to leave one.</div>`; return; }
+    const mine = currentComments();
+    panelEl.querySelector(".s").textContent = `${mine.length} on ${originOf()} · across ${new Set(mine.map((c) => c.route)).size} page(s)`;
+    if (!mine.length) { body.innerHTML = `<div class="empty">No comments on this site yet.<br/>Tap the bubble, then click any element to leave one.</div>`; return; }
     const groups = {};
-    for (const c of session.comments) (groups[c.route] = groups[c.route] || []).push(c);
+    for (const c of mine) (groups[c.route] = groups[c.route] || []).push(c);
     let html = "";
     for (const route of Object.keys(groups)) {
       html += `<div class="grp-h">${escapeHtml(route)}</div>`;
@@ -744,8 +758,8 @@
 
   // -------------------------------------------------------------- export ----
   function buildBrief() {
-    const cs = [...session.comments].sort((a, b) => a.n - b.n);
-    const origin = cs[0]?.origin || originOf();
+    const cs = currentComments().sort((a, b) => a.n - b.n);   // this site only
+    const origin = originOf();
     const lines = [];
     lines.push(`# Mochi review — ${origin} — ${cs.length} comment${cs.length === 1 ? "" : "s"}`);
     lines.push(`Generated ${new Date().toISOString()}. Each item has a CSS selector + route so you can locate the exact element. Fix each comment.`);
@@ -762,7 +776,8 @@
     return lines.join("\n");
   }
   async function copyBrief() {
-    if (!session.comments.length) { toast("No comments to copy yet"); return; }
+    const count = currentComments().length;
+    if (!count) { toast("No comments on this site to copy yet"); return; }
     const text = buildBrief();
     let ok = false;
     try { await navigator.clipboard.writeText(text); ok = true; } catch {}
@@ -773,7 +788,7 @@
         document.body.appendChild(ta); ta.select(); ok = document.execCommand("copy"); ta.remove();
       } catch {}
     }
-    toast(ok ? `Copied ${session.comments.length} comments — paste into your coding agent` : "Copy failed — clipboard blocked");
+    toast(ok ? `Copied ${count} comment${count === 1 ? "" : "s"} — paste into your coding agent` : "Copy failed — clipboard blocked");
   }
 
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }

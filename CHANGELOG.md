@@ -8,6 +8,21 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.7.2] — 2026-06-09
+
+### Fixed (Comment Mode)
+
+- **Comments are now scoped per-site (origin).** They were stored in one global
+  list and only the on-page pins were site-filtered, so the comments list, the
+  count badge, and **Copy brief** showed/exported *every* site's comments —
+  starting a session on a new website appeared to inherit the previous site's
+  comments. Now the count, list, export, and per-comment numbering (each site
+  starts at **#1**) are all scoped to the current site, and **Clear** removes
+  only the current site's comments. Storage keeps each site's comments isolated
+  by origin, so returning to a site restores its comments.
+
+---
+
 ## [0.7.1] — 2026-06-09
 
 ### Changed (Comment Mode UX, from user feedback)
