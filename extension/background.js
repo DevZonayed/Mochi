@@ -48,6 +48,86 @@ chrome.storage.local.get(["notifEnabled", "notifVerified"]).then((o) => {
   if (typeof o.notifVerified === "boolean") notifPrefs.verified = o.notifVerified;
 }).catch(() => {});
 
+// ---------------- comment mode (standalone visual annotation) ----------------
+// Tabs that currently run a comment session — kept injected across navigation.
+// Persisted so the set survives service-worker eviction.
+const COMMENT_TABS_KEY = "mochiCommentTabs";
+const COMMENT_SESSION_KEY = "mochiCommentSession";
+const commentTabs = new Set();
+// Hydration is async on a cold service-worker boot; handlers await this before
+// trusting commentTabs so a toggle/status doesn't race an empty set.
+const commentTabsReady = chrome.storage.local.get([COMMENT_TABS_KEY]).then((o) => {
+  const arr = o && o[COMMENT_TABS_KEY];
+  if (Array.isArray(arr)) for (const id of arr) commentTabs.add(id);
+}).catch(() => {});
+function persistCommentTabs() {
+  try { chrome.storage.local.set({ [COMMENT_TABS_KEY]: [...commentTabs] }); } catch {}
+}
+async function setCommentActive(active) {
+  try {
+    const o = await chrome.storage.local.get([COMMENT_SESSION_KEY]);
+    const s = (o && o[COMMENT_SESSION_KEY]) || {};
+    s.active = active;
+    if (active && !s.startedAt) s.startedAt = Date.now();
+    if (!Array.isArray(s.comments)) s.comments = [];
+    await chrome.storage.local.set({ [COMMENT_SESSION_KEY]: s });
+  } catch {}
+}
+async function isCommentActive() {
+  try { const o = await chrome.storage.local.get([COMMENT_SESSION_KEY]); return !!(o && o[COMMENT_SESSION_KEY] && o[COMMENT_SESSION_KEY].active); } catch { return false; }
+}
+async function injectCommentMode(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["comment-merge.js", "comment-mode.js"] });
+    return true;
+  } catch (e) {
+    try { console.warn("[mochi] comment-mode inject failed:", e?.message); } catch {}
+    return false;
+  }
+}
+async function startCommentSession(tabId) {
+  await commentTabsReady;
+  await setCommentActive(true);   // active before injecting so the script renders
+  commentTabs.add(tabId); persistCommentTabs();
+  return injectCommentMode(tabId);
+}
+// Stop ONE tab (or all when tabId is omitted). The global active flag is only
+// cleared once the last commenting tab is gone, so other tabs keep their overlay.
+async function stopCommentSession(tabId) {
+  await commentTabsReady;
+  const targets = tabId != null ? [tabId] : [...commentTabs];
+  for (const id of targets) {
+    try { await chrome.tabs.sendMessage(id, { type: "comment_teardown" }); } catch {}
+    commentTabs.delete(id);
+  }
+  persistCommentTabs();
+  if (commentTabs.size === 0) await setCommentActive(false);
+}
+async function unregisterCommentTab(tabId) {
+  await commentTabsReady;
+  if (commentTabs.delete(tabId)) persistCommentTabs();
+  if (commentTabs.size === 0) await setCommentActive(false);
+}
+// Re-inject comment mode after navigation/reload so the FAB + pins persist —
+// but only while the session is genuinely active.
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status !== "complete") return;
+  commentTabsReady.then(async () => {
+    if (!commentTabs.has(tabId)) return;
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (!t || !t.url || !/^https?:\/\//i.test(t.url)) return;
+    if (await isCommentActive()) injectCommentMode(tabId);
+  });
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (commentTabs.delete(tabId)) { persistCommentTabs(); if (commentTabs.size === 0) setCommentActive(false); }
+});
+// Tab IDs are not stable across a browser restart — drop the persisted set so
+// comment mode never force-injects into an unrelated restored tab.
+chrome.runtime.onStartup.addListener(() => {
+  commentTabs.clear(); persistCommentTabs(); setCommentActive(false);
+});
+
 // Post an OS notification for a session. Never raises the window — that only
 // happens if the user clicks (see chrome.notifications.onClicked below).
 // When notifications are off we just no-op: a toolbar badge would collide with
@@ -1052,6 +1132,10 @@ async function dispatch(type, p, clientId) {
     case "session_start":      return sessionStart(p, clientId);
     case "session_end":        return sessionEnd(p, clientId);
     case "request_attention":  return requestAttention(p, clientId);
+    case "comment_add":        return commentAdd(p, clientId);
+    case "comment_list":       return commentList(p, clientId);
+    case "comment_sessions":   return commentSessions(p, clientId);
+    case "comment_resolve":    return commentResolve(p, clientId);
     case "client_cleanup":     return clientCleanup(clientId);
     case "navigate":           return navigate(p, clientId);
     case "open_tab":           return openTab(p, clientId);
@@ -1259,6 +1343,152 @@ async function requestAttention({ reason, tabId, urgent = true } = {}, clientId)
     notifTargets.set(`mochi:${clientId}:attention`, { clientId, windowId: s.windowId, tabId });
   }
   return { ok: true, notified: shown, hasSession: !!s, reason: reason ?? null };
+}
+
+// ---------------- comment-mode bridge (agent QA ↔ human Comment Mode) ---------
+// Read-modify-write the SAME chrome.storage.local document Comment Mode uses, so
+// agent-created comments appear live as pins in the human's extension.
+const MC_KEY = "mochiComments";
+function mcGet() {
+  return new Promise((r) => {
+    try { chrome.storage.local.get([MC_KEY], (o) => r((o && o[MC_KEY]) || { v: 2, taughtScroll: false, activeByOrigin: {}, pending: null, sessions: {} })); }
+    catch { r({ v: 2, taughtScroll: false, activeByOrigin: {}, pending: null, sessions: {} }); }
+  });
+}
+function mcSet(store) { return new Promise((r) => { try { chrome.storage.local.set({ [MC_KEY]: store }, r); } catch { r(); } }); }
+const mcUid = (p) => p + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+
+// Resolve an element's selector/box/route metadata on the session's primary tab.
+async function resolveElementMeta(tabId, selector) {
+  try {
+    const [{ result } = {}] = await chrome.scripting.executeScript({
+      target: { tabId }, args: [selector || ""],
+      func: (sel) => {
+        function uniq(el) {
+          if (!el || el.nodeType !== 1) return "";
+          if (el.id && /^[A-Za-z][A-Za-z0-9_-]*$/.test(el.id)) return "#" + el.id;
+          const parts = []; let c = el;
+          while (c && c.nodeType === 1 && c !== document.documentElement) {
+            let p = c.tagName.toLowerCase();
+            if (c.id && /^[A-Za-z][A-Za-z0-9_-]*$/.test(c.id)) { parts.unshift("#" + c.id); break; }
+            if (c.classList && c.classList.length) { const cl = [...c.classList].slice(0, 2).map((x) => x.replace(/[^A-Za-z0-9_-]/g, "")).filter(Boolean).join("."); if (cl) p += "." + cl; }
+            const par = c.parentElement;
+            if (par) { const sib = [...par.children].filter((x) => x.tagName === c.tagName); if (sib.length > 1) p += ":nth-of-type(" + (sib.indexOf(c) + 1) + ")"; }
+            parts.unshift(p); c = par; if (parts.length >= 6) break;
+          }
+          return parts.join(" > ") || el.tagName.toLowerCase();
+        }
+        const base = { route: location.pathname + location.search, url: location.href, origin: location.origin, viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio || 1 } };
+        // No selector → a page-level comment: anchor to <body> so it renders as a
+        // real top-of-page pin instead of a useless detached corner pin.
+        const el = sel ? document.querySelector(sel) : (document.body || document.documentElement);
+        if (!el) return { ok: false, selector: sel || "", ...base };
+        const r = el.getBoundingClientRect();
+        return { ok: true, selector: sel ? uniq(el) : "body", tagName: el.tagName.toLowerCase(), role: el.getAttribute("role") || el.tagName.toLowerCase(),
+          elementText: (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 90),
+          box: { x: Math.round(r.left + scrollX), y: Math.round(r.top + scrollY), w: Math.round(r.width), h: Math.round(r.height) }, ...base };
+      },
+    });
+    return result || null;
+  } catch { return null; }
+}
+// Origin of a tab's current URL (for default-scoping list/sessions to the site
+// the agent is actually QA-ing, instead of leaking every origin in the profile).
+async function tabOrigin(tabId) {
+  try { const t = await chrome.tabs.get(tabId); return t && t.url ? new URL(t.url).origin : null; } catch { return null; }
+}
+// Keep only a well-formed {label,width}; a malformed breakpoint would render
+// "undefined" in the panel and never match a device-frame width.
+function normBreakpoint(bp) {
+  if (!bp || typeof bp !== "object") return null;
+  const w = Number(bp.width);
+  if (!bp.label || !Number.isFinite(w) || w <= 0) return null;
+  return { label: String(bp.label), width: Math.round(w) };
+}
+async function commentAdd({ selector, ref, text, sessionName, breakpoint, severity } = {}, clientId) {
+  const sess = clientId ? sessions.get(clientId) : null;
+  if (!sess) throw new Error("no active session");
+  const sel = selector || ref || "";
+  const meta = await resolveElementMeta(sess.primaryTabId, sel);
+  if (!meta) throw new Error("could not resolve the page");
+  const store = await mcGet();
+  const origin = meta.origin;
+  // Resolve the target name up front so repeated calls with NO sessionName land
+  // in ONE session (matching on the same resolved default) instead of minting a
+  // fresh "QA <date>" every time.
+  const wantName = (sessionName && String(sessionName).trim()) || `QA ${new Date().toISOString().slice(0, 10)}`;
+  let s = Object.values(store.sessions).find((x) => x.origin === origin && x.name === wantName);
+  if (!s) {
+    s = { id: mcUid("s"), name: wantName, origin, createdAt: Date.now(), updatedAt: Date.now(), comments: [] };
+    store.sessions[s.id] = s;
+  }
+  const now = Date.now();
+  const n = s.comments.reduce((m, c) => Math.max(m, c.n || 0), 0) + 1;
+  const comment = {
+    id: mcUid("c"), sessionId: s.id, n, text: String(text || ""),
+    url: meta.url, route: meta.route, origin,
+    selector: meta.selector || sel, tagName: meta.tagName || "", role: meta.role || "", elementText: meta.elementText || "",
+    box: meta.box || { x: 0, y: 0, w: 0, h: 0 }, viewport: meta.viewport || { w: 0, h: 0, dpr: 1 },
+    breakpoint: normBreakpoint(breakpoint), severity: severity || null, resolved: false, createdAt: now, updatedAt: now,
+  };
+  s.comments.push(comment); s.updatedAt = now;
+  // Select this session for the origin ONLY if the human isn't already viewing a
+  // valid session there — never yank their active session out from under them.
+  if (!store.activeByOrigin[origin] || !store.sessions[store.activeByOrigin[origin]]) {
+    store.activeByOrigin[origin] = s.id;
+  }
+  await mcSet(store);
+  // Close the loop client-side: make sure Comment Mode is actually mounted on
+  // the tab so the agent's comment shows up as a live pin without the human
+  // having pre-opened Comment Mode. mcSet already persisted, so the freshly
+  // injected (or resynced) content script reads it on mount.
+  try {
+    await commentTabsReady;
+    await setCommentActive(true);
+    if (sess.primaryTabId != null) {
+      commentTabs.add(sess.primaryTabId); persistCommentTabs();
+      await injectCommentMode(sess.primaryTabId);
+    }
+  } catch {}
+  return { ok: true, id: comment.id, n, sessionId: s.id, sessionName: s.name, located: !!meta.ok };
+}
+async function commentList({ sessionId, sessionName, origin, includeResolved = true } = {}, clientId) {
+  const store = await mcGet();
+  // A bare call (no filter) defaults to THIS tab's origin so an agent never
+  // dumps every site's comments from the whole browser profile into its context.
+  if (!sessionId && !sessionName && !origin && clientId) {
+    const sess = sessions.get(clientId);
+    if (sess && sess.primaryTabId != null) origin = await tabOrigin(sess.primaryTabId);
+  }
+  let list = Object.values(store.sessions);
+  if (sessionId) list = list.filter((s) => s.id === sessionId);
+  else if (sessionName) list = list.filter((s) => s.name === sessionName);
+  if (origin) list = list.filter((s) => s.origin === origin);
+  const comments = list.flatMap((s) => s.comments.map((c) => ({ ...c, sessionId: s.id, sessionName: s.name })))
+    .filter((c) => includeResolved || !c.resolved)
+    .sort((a, b) => (a.route || "").localeCompare(b.route || "") || (a.n - b.n));
+  return { ok: true, count: comments.length, comments };
+}
+async function commentSessions({ origin } = {}, clientId) {
+  const store = await mcGet();
+  if (!origin && clientId) {
+    const sess = sessions.get(clientId);
+    if (sess && sess.primaryTabId != null) origin = await tabOrigin(sess.primaryTabId);
+  }
+  const list = Object.values(store.sessions).filter((s) => !origin || s.origin === origin)
+    .map((s) => ({ id: s.id, name: s.name, origin: s.origin, count: s.comments.length, updatedAt: s.updatedAt }))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return { ok: true, sessions: list };
+}
+async function commentResolve({ id, resolved = true } = {}) {
+  const store = await mcGet();
+  let hit = false;
+  for (const s of Object.values(store.sessions)) {
+    const c = s.comments.find((x) => x.id === id);
+    if (c) { c.resolved = !!resolved; c.updatedAt = Date.now(); s.updatedAt = Date.now(); hit = true; break; }
+  }
+  if (hit) await mcSet(store);
+  return { ok: hit, id, resolved };
 }
 
 async function navigate({ url, tabId, bringToFront = false, hardReload = false, disableCache = false } = {}, clientId) {
@@ -2904,7 +3134,7 @@ async function captureCroppedScreenshot({ tabId, rect, dpr }) {
   }
 }
 
-chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   (async () => {
     try {
       if (req?.type === "popup_status") {
@@ -2981,6 +3211,45 @@ chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
           ok = r.ok && body.ok !== false;
         } catch {}
         sendResponse({ ok });
+      } else if (req?.type === "popup_comment_status") {
+        await commentTabsReady;
+        let count = 0, active = false;
+        try {
+          let tab; try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); } catch {}
+          active = !!(tab && tab.id != null && commentTabs.has(tab.id));   // status for THIS tab
+          // Count from the live `mochiComments` store (the legacy
+          // mochiCommentSession.comments array is always empty post-0.8.0) so the
+          // badge reflects agent- and human-added comments for THIS site.
+          let origin = null; try { origin = tab && tab.url ? new URL(tab.url).origin : null; } catch {}
+          const mc = await mcGet();
+          const sid = origin && mc.activeByOrigin ? mc.activeByOrigin[origin] : null;
+          const cs = sid && mc.sessions && mc.sessions[sid] ? mc.sessions[sid] : null;
+          count = (cs && Array.isArray(cs.comments)) ? cs.comments.length : 0;
+        } catch {}
+        sendResponse({ active, count });
+      } else if (req?.type === "popup_start_comment_session") {
+        let tab;
+        try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); } catch {}
+        if (!tab || !tab.id) { sendResponse({ ok: false, error: "no active tab" }); return; }
+        if (tab.url && /^(chrome|edge|brave|chrome-extension|devtools|about|view-source):/i.test(tab.url)) {
+          sendResponse({ ok: false, error: "Can't run on this page (browser-internal). Open a normal website or your localhost app." });
+          return;
+        }
+        const ok = await startCommentSession(tab.id);
+        sendResponse({ ok });
+      } else if (req?.type === "popup_stop_comment_session") {
+        // Stop the focused tab's session (per-tab).
+        let tab; try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); } catch {}
+        if (tab && tab.id != null) await stopCommentSession(tab.id);
+        else await stopCommentSession();
+        sendResponse({ ok: true });
+      } else if (req?.type === "comment_register_tab") {
+        await commentTabsReady;
+        if (sender?.tab?.id != null) { commentTabs.add(sender.tab.id); persistCommentTabs(); }
+        sendResponse({ ok: true });
+      } else if (req?.type === "comment_unregister_tab") {
+        if (sender?.tab?.id != null) await unregisterCommentTab(sender.tab.id);
+        sendResponse({ ok: true });
       } else if (req?.type === "popup_send_claude_message") {
         const sessionId = req.sessionId;
         const message = String(req.message ?? "").trim();
@@ -3067,14 +3336,21 @@ chrome.runtime.onMessage.addListener((req, _sender, sendResponse) => {
 // Injects mochi-modal.js into the active tab via chrome.scripting; the
 // modal lives in a shadow-DOM container so it doesn't inherit page styles.
 chrome.commands.onCommand.addListener(async (cmd) => {
-  if (cmd !== "open-send-hint-modal") return;
+  if (cmd !== "open-send-hint-modal" && cmd !== "toggle-comment-mode") return;
   let tab;
   try { [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true }); } catch {}
   if (!tab || !tab.id) return;
   // chrome:// and similar are restricted — don't try to inject.
-  if (tab.url && /^(chrome|edge|brave|chrome-extension|devtools|about):/i.test(tab.url)) {
+  if (tab.url && /^(chrome|edge|brave|chrome-extension|devtools|about|view-source):/i.test(tab.url)) {
     try { chrome.action.setBadgeText({ text: "!", tabId: tab.id }); } catch {}
     setTimeout(() => { try { chrome.action.setBadgeText({ text: "", tabId: tab.id }); } catch {} }, 1500);
+    return;
+  }
+  if (cmd === "toggle-comment-mode") {
+    // Toggle THIS tab only (await hydration so a cold-boot set isn't empty).
+    await commentTabsReady;
+    if (commentTabs.has(tab.id)) { await stopCommentSession(tab.id); }
+    else { await startCommentSession(tab.id); }
     return;
   }
   try {

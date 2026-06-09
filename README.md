@@ -136,7 +136,15 @@ at the same time — pick one.
 
 ## Tools (MCP)
 
-61 tools, grouped by purpose.
+65 tools, grouped by purpose.
+
+> **Design-QA loop (0.9.0+).** An agent can run a design-QA pass and drop a
+> comment on every issue via `browser_comment_add` — those comments appear to
+> you as **pins in Comment Mode** (they share the extension's storage). You
+> review/edit them client-side, then the agent reads the session back
+> (`browser_comment_list`) and fixes everything in bulk, marking each
+> `browser_comment_resolve`. Drive it with **`/mochi:design-qa [focus]`** and
+> **`/mochi:design-qa fix`**.
 
 > **Notifications, not focus-stealing (0.5.0+).** Automation never raises the
 > Chrome window to the OS foreground on its own — it posts a click-to-focus
