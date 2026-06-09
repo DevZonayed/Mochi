@@ -101,3 +101,25 @@ test("eraseIid removes every stored event for an iid (GDPR erasure), returns cou
   assert.deepEqual(left.map((e) => e.iid), ["i-keep"]);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("readAllEvents skips blank + corrupt lines (fault-tolerant), eraseIid preserves them", () => {
+  const dir = tmp();
+  // Write a day-file manually: valid line, blank line, corrupt line, valid line
+  // This mirrors the exact pattern tested in plugins/continuum/tests/run-telemetry-log.mjs test #3.
+  const evDir = path.join(dir, "events");
+  fs.mkdirSync(evDir, { recursive: true });
+  const good1 = JSON.stringify({ ts: 1717900000, iid: "i-good", tool: "Read" });
+  const good2 = JSON.stringify({ ts: 1717900001, iid: "i-good", tool: "Edit" });
+  fs.writeFileSync(path.join(evDir, "2024-06-09.jsonl"),
+    good1 + "\n\n{bad json\n" + good2 + "\n");
+  // readAllEvents must return only the 2 valid events, skipping blank + corrupt
+  const all = readAllEvents(dir);
+  assert.equal(all.length, 2, "blank + corrupt lines skipped by readAllEvents");
+  assert.deepEqual(all.map((e) => e.tool).sort(), ["Edit", "Read"]);
+  // eraseIid for a different iid must preserve the corrupt line (catch { kept.push(line) })
+  const removed = eraseIid(dir, "i-other");
+  assert.equal(removed, 0, "no events removed for unknown iid");
+  const raw = fs.readFileSync(path.join(evDir, "2024-06-09.jsonl"), "utf8");
+  assert.ok(raw.includes("{bad json"), "corrupt line preserved through eraseIid");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
