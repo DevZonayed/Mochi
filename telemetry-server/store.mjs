@@ -16,7 +16,11 @@ export function eventsPath(dataDir, day) { return path.join(eventsDir(dataDir), 
 export function appendEvents(dataDir, events) {
   const byDay = new Map();
   for (const e of events) {
-    const day = dayBucket(typeof e.ts === "number" ? e.ts : 0);
+    // Fall back to current time (seconds) when ts is absent or non-numeric so
+    // that distillation records (which carry no ts field) land in today's bucket
+    // rather than 1970-01-01.jsonl where they would be immediately swept away.
+    const tsSeconds = typeof e.ts === "number" ? e.ts : Math.floor(Date.now() / 1000);
+    const day = dayBucket(tsSeconds);
     if (!byDay.has(day)) byDay.set(day, []);
     byDay.get(day).push(JSON.stringify(e));
   }
