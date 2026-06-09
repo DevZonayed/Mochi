@@ -95377,15 +95377,20 @@ var tools = [
   // --- comment mode bridge (design QA ↔ human review) ---
   {
     name: "browser_comment_add",
-    description: "Drop a Comment-Mode comment on a page element \u2014 it appears to the human as a pin in the Mochi extension. Use during design QA: one call per issue. Resolves the element on the live session tab and stores it in a named session for this site (find-or-create by sessionName).",
+    description: "Drop a Comment-Mode comment on a page element \u2014 it appears to the human as a live pin in the Mochi extension (Comment Mode is auto-activated on the session tab). Use during design QA: one call per issue. Resolves the element on the live session tab and stores it in a named session for this site (find-or-create by sessionName; omit sessionName and repeated calls reuse one default 'QA <date>' session). The response includes `located` \u2014 if it is false the selector did not resolve on the page, so retry with a more precise selector.",
     inputSchema: {
       type: "object",
       properties: {
-        selector: { type: "string", description: "CSS selector for the element (use refs from browser_snapshot)." },
+        selector: { type: "string", description: "Precise CSS selector for the element (use refs from browser_snapshot / browser_audit_interactives). Omit only for a page-level comment (anchors to <body>)." },
         ref: { type: "string", description: "Alias for selector." },
         text: { type: "string", description: "The comment / fix instruction." },
         sessionName: { type: "string", description: "Session to add to (find-or-create for this origin). Use a meaningful, project-wise name like '<repo> \xB7 <branch> \u2014 QA <date>'." },
-        breakpoint: { type: "object", description: "Optional {label,width} when commenting at a responsive width." },
+        breakpoint: {
+          type: "object",
+          description: "Optional, when commenting at a responsive width. Prefer the extension's device presets (375, 390, 768, 1024, 1280, 1440) so the pin is revealable in the device frame. Both label and width are required or it is ignored.",
+          properties: { label: { type: "string" }, width: { type: "number" } },
+          required: ["label", "width"]
+        },
         severity: { type: "string", enum: ["low", "medium", "high"], description: "Optional severity \u2014 tints the pin (grey/amber/red)." }
       },
       required: ["text"]
@@ -95393,7 +95398,7 @@ var tools = [
   },
   {
     name: "browser_comment_list",
-    description: "List Comment-Mode comments (to bulk-fix a QA session). Returns each comment's n, route, url, selector, element, text, severity, resolved. Filter by sessionName/sessionId/origin.",
+    description: "List Comment-Mode comments (to bulk-fix a QA session). Returns each comment's n, route, url, selector, element, text, severity, resolved. Filter by sessionName/sessionId/origin; a bare call defaults to the current session tab's origin (this site only).",
     inputSchema: {
       type: "object",
       properties: {
@@ -95406,7 +95411,7 @@ var tools = [
   },
   {
     name: "browser_comment_sessions",
-    description: "List Comment-Mode sessions (id, name, origin, comment count, updatedAt).",
+    description: "List Comment-Mode sessions (id, name, origin, comment count, updatedAt). Defaults to the current session tab's origin when origin is omitted.",
     inputSchema: { type: "object", properties: { origin: { type: "string" } } }
   },
   {

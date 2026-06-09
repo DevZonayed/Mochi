@@ -8,6 +8,40 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.9.1] — 2026-06-09
+
+### Fixed — Design-QA loop hardening (adversarial review of 0.9.0)
+
+- **The loop now actually closes client-side.** `browser_comment_add` activates
+  Comment Mode and injects the content script on the session tab, so agent
+  comments show up as **live pins immediately** — the human no longer has to open
+  Comment Mode first for anything to appear.
+- **No more silent comment loss between the agent and the human.** The background
+  bridge and the content script are independent writers of the same
+  `mochiComments` document; whole-document last-write-wins could drop either
+  side's comments during concurrent QA-while-reviewing. Writes are now merged by
+  **id-based union** (new `comment-merge.js`, unit-tested for no-loss +
+  convergence), with every comment carrying an `updatedAt` so edits/resolves win
+  deterministically.
+- **The agent no longer hijacks the human's active session.** A QA write only
+  auto-selects its session for an origin when the human isn't already viewing one
+  there.
+- **Repeated `browser_comment_add` calls with no `sessionName`** now reuse one
+  default `QA <date>` session instead of minting a new session every call.
+- **Breakpoint comments are never invisible.** They render as normal page pins
+  when the device frame is closed, and the in-frame width match is tolerant
+  (±60px) so emulate widths still reveal them. Malformed `{label,width}` values
+  are normalized away (no more `undefined` chips).
+- **`browser_comment_list` / `browser_comment_sessions`** default-scope to the
+  current session tab's origin (no cross-project leakage from a bare call).
+- **Popup comment count** reads the live `mochiComments` store instead of the
+  dead legacy key, so it reflects agent-added comments.
+- Page-level comments (no selector) anchor to `<body>`; the session-switcher
+  dropdown closes on FAB/dock clicks; `design-qa.md` documents the same-Chrome
+  requirement, `located` retries, and preset breakpoint widths.
+
+---
+
 ## [0.9.0] — 2026-06-09
 
 ### Added — Design-QA loop (browser MCP ↔ Comment Mode)
