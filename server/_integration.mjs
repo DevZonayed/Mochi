@@ -51,6 +51,12 @@ function startFakeExtension() {
       case "request_attention":
         result = { ok: true, notified: true, hasSession: true, reason: params?.reason ?? null };
         break;
+      case "comment_add":
+        result = { ok: true, id: "c-test", n: 1, sessionId: "s-test", sessionName: params?.sessionName ?? "QA", located: true };
+        break;
+      case "comment_list":
+        result = { ok: true, count: 1, comments: [{ id: "c-test", n: 1, route: "/", text: "fix this", selector: "h1", severity: "high", resolved: false }] };
+        break;
       case "snapshot":
         result = {
           tabId: 100,
@@ -233,7 +239,7 @@ async function main() {
   logStep("Listing tools");
   const tools = await client.listTools();
   const names = tools.tools.map((t) => t.name);
-  assertEq("total tool count", names.length, 61);
+  assertEq("total tool count", names.length, 65);
   for (const n of [
     "browser_session_health",
     "browser_evaluate",
@@ -358,6 +364,13 @@ async function main() {
   const attnRes = parsePayload(await client.callTool({ name: "browser_request_attention", arguments: { reason: "look here" } }));
   assertOk("request_attention ok", attnRes.ok === true, attnRes);
   assertEq("request_attention reason echoed", attnRes.reason, "look here");
+
+  // ----- 9d) comment-mode bridge round-trips through the broker (0.9.0) -----
+  logStep("Calling browser_comment_add + browser_comment_list");
+  const cAdd = parsePayload(await client.callTool({ name: "browser_comment_add", arguments: { selector: "h1", text: "fix this", sessionName: "QA", severity: "high" } }));
+  assertOk("comment_add ok", cAdd.ok === true, cAdd);
+  const cList = parsePayload(await client.callTool({ name: "browser_comment_list", arguments: { sessionName: "QA" } }));
+  assertOk("comment_list returns comments", Array.isArray(cList.comments) && cList.comments.length === 1, cList);
 
   // ----- 9e) /os/open-notification-settings HTTP route is reachable (0.5.0) -----
   // (regression guard: it must NOT 404 behind the /claude/ path prefix gate)
