@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 
 export const DIR_NAME = ".continuum";
 
@@ -178,4 +179,34 @@ export function commsCursorPath(projectDir, provider, accountId, chatId) {
 }
 export function commsMetaPath(projectDir, provider, accountId, chatId) {
   return path.join(commsChatDir(projectDir, provider, accountId, chatId), "meta.json");
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry (Mochi Insight) path helpers. Everything Zone-A/Zone-B lives under
+// .continuum/telemetry/ and is GITIGNORED (per-user/per-machine, not a repo
+// artifact). The anonymous install-id is machine-scoped, so it lives OUTSIDE
+// the repo at ~/.mochi/install-id (NO PII, rotates — see install_id.js).
+// ---------------------------------------------------------------------------
+export function telemetryDir(projectDir) {
+  return path.join(continuumRoot(projectDir), "telemetry");
+}
+export function telemetryEventsPath(projectDir) {
+  return path.join(telemetryDir(projectDir), "events.jsonl");
+}
+// config.json holds the per-user consent decision — GITIGNORED (not committed).
+export function telemetryConfigPath(projectDir) {
+  return path.join(telemetryDir(projectDir), "config.json");
+}
+// queue.jsonl holds unsent batches awaiting the next flush (capped).
+export function telemetryQueuePath(projectDir) {
+  return path.join(telemetryDir(projectDir), "queue.jsonl");
+}
+// reviews/ holds Zone-B critiques (full suggestion_text) — NEVER auto-sent.
+export function telemetryReviewsDir(projectDir) {
+  return path.join(telemetryDir(projectDir), "reviews");
+}
+// installIdPath is home-scoped, NOT project-scoped: one anonymous id per
+// machine/user. `homeDir` is injectable for tests; defaults to os.homedir().
+export function installIdPath(homeDir) {
+  return path.join(homeDir || os.homedir(), ".mochi", "install-id");
 }
