@@ -115,3 +115,67 @@ export function estimateTokens(text) {
   if (!text) return 0;
   return Math.ceil(text.length / 4);
 }
+
+// ---------------------------------------------------------------------------
+// Comms (per-repo communication-channel sync) path helpers. All persistence
+// lives under .continuum/comms/ (resolved per spec §3.1 from an explicit
+// projectDir — never process.cwd()). config.json is COMMITTED; everything
+// else under comms/ is gitignored (auth, store, state, watermark, local cfg).
+// ---------------------------------------------------------------------------
+export function commsDir(projectDir) {
+  return path.join(continuumRoot(projectDir), "comms");
+}
+export function commsConfigPath(projectDir) {
+  return path.join(commsDir(projectDir), "config.json");
+}
+export function commsLocalConfigPath(projectDir) {
+  return path.join(commsDir(projectDir), "config.local.json");
+}
+export function commsStatePath(projectDir) {
+  return path.join(commsDir(projectDir), "state.json");
+}
+export function commsSeenPath(projectDir) {
+  return path.join(commsDir(projectDir), ".last-session-seen.json");
+}
+export function commsIndexPath(projectDir) {
+  return path.join(commsDir(projectDir), "index.jsonl");
+}
+export function commsAuthDir(projectDir, provider, accountId) {
+  return path.join(commsDir(projectDir), provider, accountId, "auth");
+}
+// commsChatDir resolves the per-chat store directory. SECURITY: `chatId` is the
+// only segment that can come from untrusted/remote input (a JID off the wire),
+// so it is sanitized here as defense-in-depth — a chatId is always a single path
+// segment, never a sub-path. Any value containing a path separator ('/' or '\')
+// or a parent-dir token ('..') is rejected so a crafted chatId can never escape
+// the store root via path.join. Legitimate JIDs ("c@g.us",
+// "12345@s.whatsapp.net") have none of these and are unaffected.
+function assertSafeChatSegment(chatId) {
+  if (typeof chatId !== "string" || chatId.length === 0) {
+    throw new Error(`commsChatDir: invalid chatId: ${JSON.stringify(chatId)}`);
+  }
+  if (chatId.includes("/") || chatId.includes("\\") || chatId.includes("..")) {
+    throw new Error(`commsChatDir: unsafe chatId (path traversal): ${JSON.stringify(chatId)}`);
+  }
+}
+export function commsChatDir(projectDir, provider, accountId, chatId) {
+  assertSafeChatSegment(chatId);
+  const storeRoot = path.join(commsDir(projectDir), "store", provider, accountId);
+  const result = path.join(storeRoot, chatId);
+  // Belt-and-suspenders: the resolved dir MUST stay under the per-account store
+  // root. (The segment check above already guarantees this; this assert makes the
+  // invariant explicit and future-proofs it against any new sanitizer gaps.)
+  if (path.resolve(result) !== path.join(path.resolve(storeRoot), chatId)) {
+    throw new Error(`commsChatDir: resolved path escapes store root: ${result}`);
+  }
+  return result;
+}
+export function commsMessagesPath(projectDir, provider, accountId, chatId) {
+  return path.join(commsChatDir(projectDir, provider, accountId, chatId), "messages.jsonl");
+}
+export function commsCursorPath(projectDir, provider, accountId, chatId) {
+  return path.join(commsChatDir(projectDir, provider, accountId, chatId), "cursor.json");
+}
+export function commsMetaPath(projectDir, provider, accountId, chatId) {
+  return path.join(commsChatDir(projectDir, provider, accountId, chatId), "meta.json");
+}
