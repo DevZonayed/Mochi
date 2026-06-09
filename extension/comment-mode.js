@@ -239,9 +239,14 @@
       .dev .dwid { color:#fff; font-size:12px; opacity:.85; font-variant-numeric:tabular-nums; }
       .dev .dstage { flex:1; display:flex; align-items:center; justify-content:center; overflow:auto; padding:0 16px 20px; }
       .dev .framewrap { position:relative; background:#fff; border-radius:18px; box-shadow:0 24px 60px -12px rgba(0,0,0,.6); overflow:hidden; flex-shrink:0; }
-      .dev iframe { border:none; display:block; background:#fff; }
+      .dev .frameinner { position:absolute; top:0; left:0; transform-origin:0 0; }
+      .dev iframe { border:none; display:block; background:#fff; width:100%; height:100%; }
       .dev .dnote { color:#fff; opacity:.85; font-size:12.5px; max-width:420px; text-align:center; line-height:1.6; background:rgba(0,0,0,.3); padding:14px 18px; border-radius:12px; }
       .dev .doverlay { position:absolute; inset:0; pointer-events:none; }
+      .dev .dnum { width:64px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.22); color:#fff; border-radius:7px; padding:4px 7px; font-size:12px; font-family:inherit; }
+      .dev .dnum:focus { outline:none; border-color:#fff; }
+      .dev .dcustom { display:none; align-items:center; gap:6px; color:#fff; font-size:12px; }
+      .dev .dcustom.on { display:inline-flex; }
 
       /* ---- scroll-teach ---- */
       .teach { position:fixed; left:50%; bottom:96px; transform:translateX(-50%); background:rgba(20,20,22,.95); color:#fff;
@@ -390,12 +395,13 @@
     const el = pickTarget.doc.elementFromPoint(ev.clientX, ev.clientY);
     if (!el || hostHit(el)) { hlEl.style.opacity = "0"; return; }
     const off = pickTarget.offset();
+    const s = pickTarget.scale ? pickTarget.scale() : 1;
     const r = el.getBoundingClientRect();
     hlEl.style.opacity = "1";
-    hlEl.style.left = `${off.x + r.left}px`;
-    hlEl.style.top = `${off.y + r.top}px`;
-    hlEl.style.width = `${r.width}px`;
-    hlEl.style.height = `${r.height}px`;
+    hlEl.style.left = `${off.x + r.left * s}px`;
+    hlEl.style.top = `${off.y + r.top * s}px`;
+    hlEl.style.width = `${r.width * s}px`;
+    hlEl.style.height = `${r.height * s}px`;
   }
   function onPick(ev) {
     if (!listening || !pickTarget) return;
@@ -435,10 +441,11 @@
         <button class="btn primary" data-x="save">Save</button>
       </div>`;
     layer.appendChild(popEl);
-    // position near element, clamped to viewport
+    // position near element, clamped to viewport (scale-aware for the device frame)
+    const ps = target.scale ? target.scale() : 1;
     const pw = 300, ph = 180;
-    let left = off.x + r.left, top = off.y + r.bottom + 8;
-    if (top + ph > window.innerHeight) top = Math.max(8, off.y + r.top - ph - 8);
+    let left = off.x + r.left * ps, top = off.y + r.bottom * ps + 8;
+    if (top + ph > window.innerHeight) top = Math.max(8, off.y + r.top * ps - ph - 8);
     left = Math.min(Math.max(8, left), window.innerWidth - pw - 8);
     popEl.style.left = `${left}px`; popEl.style.top = `${top}px`;
     const ta = popEl.querySelector("textarea");
@@ -528,7 +535,7 @@
   }
   function scheduleReposition() {
     if (rafPending) return; rafPending = true;
-    requestAnimationFrame(() => { rafPending = false; positionPins(); if (devState.open) positionDevPins(); });
+    requestAnimationFrame(() => { rafPending = false; positionPins(); if (devState.open) { layoutDeviceFrame(); positionDevPins(); } });
   }
   window.addEventListener("scroll", scheduleReposition, true);
   window.addEventListener("resize", scheduleReposition, true);
@@ -617,7 +624,13 @@
     { label: "Desktop", width: 1280, height: 800 },
     { label: "Wide", width: 1440, height: 900 },
   ];
-  const devState = { open: false, idx: 1, el: null, iframe: null, overlay: null };
+  // idx into DEVICES, or "custom" with cw/ch. scale = visual fit factor (≤1).
+  const devState = { open: false, idx: 1, custom: false, cw: 1440, ch: 900, scale: 1, el: null, iframe: null, inner: null, overlay: null };
+  function currentDevice() {
+    return devState.custom
+      ? { label: "Custom", width: Math.max(200, devState.cw | 0), height: Math.max(200, devState.ch | 0) }
+      : DEVICES[devState.idx];
+  }
 
   function openDevice() {
     if (devState.open) return;
@@ -626,22 +639,43 @@
     d.className = "dev";
     d.innerHTML = `
       <div class="dtop">
-        <div class="seg">${DEVICES.map((dv, i) => `<button data-dev="${i}">${escapeHtml(dv.label)}</button>`).join("")}</div>
+        <div class="seg">${DEVICES.map((dv, i) => `<button data-dev="${i}">${escapeHtml(dv.label)}</button>`).join("")}<button data-dev="custom">Custom</button></div>
+        <span class="dcustom"><input class="dnum" id="d-cw" type="number" min="200" step="10" /> × <input class="dnum" id="d-ch" type="number" min="200" step="10" /></span>
         <span class="dwid"></span>
         <span class="grow"></span>
         <button class="mbtn" data-x="pick" style="pointer-events:auto;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg>Comment here</button>
         <button class="mbtn" data-x="close" style="pointer-events:auto;">Done</button>
       </div>
       <div class="dstage">
-        <div class="framewrap"><iframe title="Mochi responsive preview" sandbox="allow-same-origin allow-scripts allow-forms allow-popups"></iframe><div class="doverlay"></div></div>
+        <div class="framewrap"><div class="frameinner"><iframe title="Mochi responsive preview" sandbox="allow-same-origin allow-scripts allow-forms allow-popups"></iframe></div><div class="doverlay"></div></div>
       </div>`;
     layer.appendChild(d);
     devState.el = d;
     devState.iframe = d.querySelector("iframe");
+    devState.inner = d.querySelector(".frameinner");
     devState.overlay = d.querySelector(".doverlay");
+    const cwEl = d.querySelector("#d-cw"), chEl = d.querySelector("#d-ch");
+    const onCustomInput = () => {
+      devState.cw = Math.max(200, parseInt(cwEl.value, 10) || 0);
+      devState.ch = Math.max(200, parseInt(chEl.value, 10) || 0);
+      applyDevice();
+    };
+    cwEl.addEventListener("input", onCustomInput);
+    chEl.addEventListener("input", onCustomInput);
+    // Don't let typing in the inputs bubble to the dev-frame click/scroll logic.
+    [cwEl, chEl].forEach((el) => el.addEventListener("click", (e) => e.stopPropagation()));
     d.addEventListener("click", (e) => {
       const seg = e.target.closest("[data-dev]");
-      if (seg) { devState.idx = +seg.dataset.dev; applyDevice(); return; }
+      if (seg) {
+        if (seg.dataset.dev === "custom") {
+          devState.custom = true;
+          const cur = DEVICES[devState.idx];
+          if (!devState.cw) devState.cw = cur.width;
+          if (!devState.ch) devState.ch = cur.height;
+        } else { devState.custom = false; devState.idx = +seg.dataset.dev; }
+        applyDevice();
+        return;
+      }
       const x = e.target.closest("[data-x]"); if (!x) return;
       if (x.dataset.x === "close") closeDevice();
       else if (x.dataset.x === "pick") { if (pickMode) stopPick(); else startDevPick(); updateDevPickBtn(); }
@@ -668,18 +702,42 @@
     b.lastChild && (b.lastChild.textContent = pickMode ? " Commenting — click elements" : " Comment here");
   }
   function applyDevice() {
-    const dv = DEVICES[devState.idx];
-    devState.el.querySelectorAll("[data-dev]").forEach((b, i) => b.classList.toggle("on", i === devState.idx));
-    devState.el.querySelector(".dwid").textContent = `${dv.width} × ${dv.height}`;
-    const fw = devState.el.querySelector(".framewrap");
-    // fit height to stage
-    const stage = devState.el.querySelector(".dstage");
-    const maxH = stage.clientHeight - 24;
-    const h = Math.min(dv.height, maxH > 200 ? maxH : dv.height);
-    fw.style.width = dv.width + "px"; fw.style.height = h + "px";
-    devState.iframe.style.width = dv.width + "px"; devState.iframe.style.height = h + "px";
+    const dv = currentDevice();
+    // segmented + custom active states
+    devState.el.querySelectorAll("[data-dev]").forEach((b) => {
+      const on = b.dataset.dev === "custom" ? devState.custom : (!devState.custom && +b.dataset.dev === devState.idx);
+      b.classList.toggle("on", on);
+    });
+    const customRow = devState.el.querySelector(".dcustom");
+    customRow.classList.toggle("on", devState.custom);
+    if (devState.custom) {
+      const cwEl = devState.el.querySelector("#d-cw"), chEl = devState.el.querySelector("#d-ch");
+      if (document.activeElement !== cwEl) cwEl.value = dv.width;
+      if (document.activeElement !== chEl) chEl.value = dv.height;
+    }
+    layoutDeviceFrame();
     if (devState.iframe.src !== location.href) devState.iframe.src = location.href;
     else { renderDevPins(); if (pickMode) { startDevPick(); updateDevPickBtn(); } }
+  }
+  // Render the iframe at the TRUE device size (so media queries are accurate),
+  // then visually scale the whole frame to fit the window — handles a custom
+  // size larger than the viewport gracefully. Safe to call on every resize.
+  function layoutDeviceFrame() {
+    if (!devState.open || !devState.inner) return;
+    const dv = currentDevice();
+    const stage = devState.el.querySelector(".dstage");
+    const availW = Math.max(120, stage.clientWidth - 32);
+    const availH = Math.max(120, stage.clientHeight - 32);
+    const scale = Math.min(1, availW / dv.width, availH / dv.height);
+    devState.scale = scale;
+    devState.inner.style.width = dv.width + "px";
+    devState.inner.style.height = dv.height + "px";
+    devState.inner.style.transform = `scale(${scale})`;
+    const fw = devState.el.querySelector(".framewrap");
+    fw.style.width = Math.round(dv.width * scale) + "px";
+    fw.style.height = Math.round(dv.height * scale) + "px";
+    devState.el.querySelector(".dwid").textContent =
+      `${dv.width} × ${dv.height}${scale < 0.999 ? ` · ${Math.round(scale * 100)}%` : ""}`;
   }
   function showDevNote(msg) {
     const stage = devState.el.querySelector(".dstage");
@@ -689,14 +747,16 @@
     if (!devState.open) return;
     stopPick();
     try { devState.el.remove(); } catch {}
-    devState.open = false; devState.el = devState.iframe = devState.overlay = null;
+    devState.open = false; devState.el = devState.iframe = devState.inner = devState.overlay = null;
   }
   function devTarget() {
     const ifr = devState.iframe;
+    const dv = currentDevice();
     return {
       doc: ifr.contentDocument, win: ifr.contentWindow,
       offset: () => { const r = ifr.getBoundingClientRect(); return { x: r.left, y: r.top }; },
-      breakpoint: { label: DEVICES[devState.idx].label, width: DEVICES[devState.idx].width },
+      scale: () => devState.scale,
+      breakpoint: { label: dv.label, width: dv.width },
     };
   }
   function startDevPick() {
@@ -716,8 +776,9 @@
     const ifr = devState.iframe;
     const ir = ifr.getBoundingClientRect();
     const fr = devState.overlay.getBoundingClientRect();
-    const dv = DEVICES[devState.idx];
-    const want = session.comments.filter((c) => c.route === routeOf() && c.origin === originOf() && c.breakpoint && c.breakpoint.width === dv.width);
+    const s = devState.scale || 1;
+    const dv = currentDevice();
+    const want = currentComments().filter((c) => c.route === routeOf() && c.breakpoint && c.breakpoint.width === dv.width);
     const existing = new Map([...devState.overlay.children].map((el) => [el.dataset.id, el]));
     for (const c of want) {
       let node = null; try { node = doc.querySelector(c.selector); } catch {}
@@ -736,9 +797,10 @@
       }
       if (node) {
         const r = node.getBoundingClientRect();
-        // overlay is positioned over the iframe; map iframe-viewport coords to overlay coords
-        el.style.left = `${(ir.left - fr.left) + r.left + Math.min(r.width, 14)}px`;
-        el.style.top = `${(ir.top - fr.top) + r.top + 2}px`;
+        // overlay sits over the (scaled) iframe; element rects are in device px,
+        // so multiply by the visual scale to map into overlay coordinates.
+        el.style.left = `${(ir.left - fr.left) + r.left * s + Math.min(r.width * s, 14)}px`;
+        el.style.top = `${(ir.top - fr.top) + r.top * s + 2}px`;
         el.style.display = (r.bottom < 0 || r.top > ifr.clientHeight) ? "none" : "flex";
       } else { el.style.display = "none"; }
     }
