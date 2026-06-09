@@ -67,4 +67,22 @@ import { telemetryConfigPath } from "../lib/paths.js";
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// 7) partial-update merge in writeConfig() — a single-field write must preserve
+//    all other previously-persisted values (the CLI on/off/review-auto subcommands
+//    each flip exactly ONE toggle; a plain {...DEFAULTS,...cfg} would silently wipe).
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tcfg-partial-"));
+  // First write a complete, non-default config.
+  writeConfig(dir, { decided: true, share: true, reviewAuto: false, killSwitch: "on", sampleN: 7 });
+  // Now flip only reviewAuto.
+  writeConfig(dir, { reviewAuto: true });
+  const cfg = readConfig(dir);
+  assert.equal(cfg.reviewAuto, true, "partial write must update the targeted field");
+  assert.equal(cfg.decided, true, "partial write must NOT wipe decided");
+  assert.equal(cfg.share, true, "partial write must NOT wipe share");
+  assert.equal(cfg.sampleN, 7, "partial write must NOT wipe sampleN");
+  assert.equal(cfg.killSwitch, "on", "partial write must NOT wipe killSwitch");
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log("✓ telemetry_config (two-toggle consent + killSwitch + INGEST consts)");
