@@ -1692,6 +1692,26 @@ import('$PLUGIN_DIR/lib/paths.js').then((m) => {
 ")
 echo "$T61_OUT" | grep -qF "HARDEN OK" && ok "commsChatDir rejects traversal, allows normal JIDs" || { fail "commsChatDir harden: $T61_OUT"; }
 
+# ---- T62: freshness gate normalizes device-suffix JIDs (M4) ------------------
+# The capture pipeline (whatsapp.js _capture) LID/device-normalizes a chatId
+# before write, so the store + cursor + setSeen all key under the NORMALIZED jid
+# ('12345:6@s.whatsapp.net' -> '12345@s.whatsapp.net'). The init-gate's freshness
+# branch must normalize the allowlisted jid the SAME way before reading cursor.json
+# and the .last-session-seen watermark, otherwise the lookup misses and a device-
+# suffix-allowlisted chat with real new activity never surfaces a freshness note.
+echo
+echo "T62 — freshness gate normalizes a device-suffix allowlisted JID before cursor/seen lookup"
+GF="$(mk_gate_repo)"
+# Allowlist carries the RAW device-suffix jid; the store lives under the normalized one.
+echo '{"version":1,"decided":true,"declined":false,"providers":{"whatsapp":{"accounts":{"work":{"capture":"session","mode":"strict","allowed_jids":["12345:6@s.whatsapp.net"]}}}}}' > "$GF/.continuum/comms/config.json"
+echo '{"whatsapp":{"work":{"status":"connected","updatedAt":1717700000}}}' > "$GF/.continuum/comms/state.json"
+mkdir -p "$GF/.continuum/comms/store/whatsapp/work/12345@s.whatsapp.net"
+echo '{"newestId":"m9","newestTs":1717800000,"oldestId":"m1","oldestTs":1717700000,"count":9}' > "$GF/.continuum/comms/store/whatsapp/work/12345@s.whatsapp.net/cursor.json"
+# watermark (keyed under the NORMALIZED jid, as setSeen writes it) behind the cursor → new activity
+echo '{"whatsapp/work/12345@s.whatsapp.net":1717700500}' > "$GF/.continuum/comms/.last-session-seen.json"
+gate_ctx "$GF" startup | grep -qi "new message" && ok "freshness note fires for device-suffix jid (normalized lookup)" || fail "freshness note missing — device-suffix jid not normalized in freshness gate"
+rm -rf "$GF"
+
 # ---- Summary -----------------------------------------------------------------
 echo
 echo "─────────────────────────────"

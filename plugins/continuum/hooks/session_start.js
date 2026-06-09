@@ -22,6 +22,7 @@ import {
   readSeen as readCommsSeen,
   accountStatuses,
 } from "../lib/comms_state.js";
+import { normalizeJid } from "../lib/comms_allowlist.js";
 
 // Resolve the directory that holds the continuum plugin's lib/ — works
 // regardless of whether continuum is bundled inside super-tester or loaded
@@ -278,7 +279,16 @@ function commsGate(projectDir, source) {
     const accounts = (providers[provider] || {}).accounts || {};
     for (const accountId of Object.keys(accounts)) {
       const allowed = accounts[accountId].allowed_jids || [];
-      for (const chatId of allowed) {
+      for (const rawChatId of allowed) {
+        // The capture pipeline (whatsapp.js _capture) LID/device-normalizes a
+        // chatId BEFORE write, so the store/cursor and setSeen's watermark are
+        // BOTH keyed under the NORMALIZED jid (e.g. "12345:6@s.whatsapp.net" ->
+        // "12345@s.whatsapp.net"). The allowlist may carry the raw, device-
+        // suffixed jid, so normalize here too — otherwise the cursor.json lookup
+        // and the seen-watermark key both miss and a chat with real new activity
+        // never surfaces a freshness note (M4).
+        const chatId = normalizeJid(rawChatId);
+        if (!chatId) continue;
         let newestTs = null;
         try {
           const cur = JSON.parse(

@@ -20,7 +20,9 @@ If they decline, stop and write nothing.
 
 **4. Pick chats for this repo.** Call `comms_list_groups` and `comms_list_chats`, present them, and let the user choose which chats/groups this repo should sync. Only chosen chats are ever captured (strict allowlist).
 
-**5. Save the allowlist.** Call `comms_set_allowlist({provider, accountId, allowed_jids})`. This **merges** into the allowlist and flips config to `decided:true, declined:false`. Newly-allowlisted chats auto-attempt history backfill.
+**5. Save the allowlist.** Call `comms_set_allowlist({provider, accountId, allowed_jids})`. This **merges** into the allowlist and flips config to `decided:true, declined:false`. History for newly-allowlisted chats is best-effort: WhatsApp ships whatever it syncs at login, and you can backfill older history later via `/mochi:comms-import`.
+
+> **Privacy note:** allowlisted phone/group JIDs are written to `.continuum/comms/config.json`, which is **committed to git** (and lands in your repo's history). For a private allowlist, put the JIDs in `.continuum/comms/config.local.json` instead — it is gitignored and wins on merge.
 
 **6. Initial sync.** Call `comms_sync_now({provider, accountId})`. Then offer `/mochi:comms-import` for older history WhatsApp didn't ship at login.
 
