@@ -159,10 +159,13 @@ try {
   const r1 = await flush(dir, {}, { fetch: f1 });
   assert.equal(f1.calls.length, 1, "first flush: one POST");
   assert.equal(r1.sent, 1, "first flush: sent=1");
-  // Watermark must have been written.
+  // Watermark must have been written using the identity (ts:sid) anchor, not a
+  // raw line count. This is the fix for quality-review finding #1: a line-count
+  // watermark becomes stale after pruneEvents() rewrites events.jsonl.
   assert.ok(fs.existsSync(telemetryWatermarkPath(dir)), "watermark file created after first flush");
   const wm = JSON.parse(fs.readFileSync(telemetryWatermarkPath(dir), "utf8"));
-  assert.equal(wm.flushedLines, 2, "watermark records 2 flushed lines");
+  assert.ok(typeof wm.lastKey === "string" && wm.lastKey.length > 0, "watermark records lastKey (ts:sid identity anchor)");
+  assert.ok(!("flushedLines" in wm), "watermark does NOT use legacy flushedLines field (line-count is prune-unsafe)");
   // Second flush — no new events in events.jsonl.
   const f2 = mockFetch({ status: 200 });
   const r2 = await flush(dir, {}, { fetch: f2 });
@@ -203,11 +206,15 @@ try {
   const r1 = await flush(dir, {}, { fetch: f1 });
   assert.equal(r1.sent, 0, "failed flush: sent=0");
   assert.equal(r1.queued, 1, "failed flush: batch queued for retry");
-  // Watermark MUST advance past all attempted events (2 lines) so the next flush
-  // does not re-include them as fresh (which would double-send with the queue).
+  // Watermark MUST advance past all attempted events so the next flush does not
+  // re-include them as fresh (which would double-send with the queue).
+  // The watermark uses a ts:sid identity anchor (not a raw line count) so it
+  // remains correct even after pruneEvents() rewrites events.jsonl.
   assert.ok(fs.existsSync(telemetryWatermarkPath(dir)), "watermark file written even on failure");
-  const wmVal = JSON.parse(fs.readFileSync(telemetryWatermarkPath(dir), "utf8")).flushedLines;
-  assert.equal(wmVal, 2, "failed flush: watermark advances past attempted events (no double-send)");
+  const wmObj = JSON.parse(fs.readFileSync(telemetryWatermarkPath(dir), "utf8"));
+  assert.ok(typeof wmObj.lastKey === "string" && wmObj.lastKey.length > 0, "failed flush: watermark written with lastKey identity anchor");
+  // The anchor must point to the LAST attempted event (browser_type, ts+1).
+  assert.equal(wmObj.lastKey, `${EV.ts + 1}:s1`, "failed flush: watermark anchor is the last attempted event (ts:sid)");
   // Retry with a working fetch — the queued batch is sent, no extra fresh events.
   const f2 = mockFetch({ status: 200 });
   const r2 = await flush(dir, {}, { fetch: f2 });
@@ -216,6 +223,56 @@ try {
   assert.equal(r2.queued, 0, "retry flush: queue cleared on success");
   ok("watermark: failed flush advances watermark + queues; retry sends once not twice");
 } catch (e) { bad("watermark: failed flush advances watermark + queues; retry sends once not twice", e); }
+
+// E12: WATERMARK survives pruneEvents() rewrite (quality-review finding #1 + #2).
+// Scenario: flush1 → 3 events sent; pruneEvents() drops the OLDEST event so
+// events.jsonl now has only 2 lines (the newer two); a new event is then appended;
+// flush2 must send ONLY the new event — not skip it (broken line-count watermark
+// would have pointed past the end) and not re-send the already-sent events.
+try {
+  const { pruneEvents } = await import(path.join(PLUGIN_DIR, "lib/telemetry_log.js"));
+  const { appendEvent } = await import(path.join(PLUGIN_DIR, "lib/telemetry_log.js"));
+
+  const dir = tmpRepo();
+  writeConfig(dir, { decided: true, share: true, killSwitch: "on", iid: "iid-prune" });
+
+  // Three events: EV_A (oldest), EV_B, EV_C — all in different seconds.
+  const nowSec = 1_800_000_000;
+  const DAY = 86400;
+  const EV_A = { ...EV, ts: nowSec - 200 * DAY, sid: "sprune", tool: "browser_click"    }; // old — will be pruned
+  const EV_B = { ...EV, ts: nowSec - 10  * DAY, sid: "sprune", tool: "browser_type"     }; // recent
+  const EV_C = { ...EV, ts: nowSec - 5   * DAY, sid: "sprune", tool: "browser_navigate" }; // recent
+  writeEvents(dir, [EV_A, EV_B, EV_C]);
+
+  // Flush 1: all three events sent.
+  const f1 = mockFetch({ status: 200 });
+  const r1 = await flush(dir, {}, { fetch: f1 });
+  assert.equal(f1.calls.length, 1, "E12: flush1 posts once");
+  assert.equal(JSON.parse(f1.calls[0].opts.body).batch.length, 3, "E12: flush1 sends all 3 events");
+  assert.equal(r1.sent, 1, "E12: flush1 sent=1");
+
+  // Now prune: drop events older than 180 days. EV_A is removed; EV_B + EV_C remain.
+  // This rewrites events.jsonl atomically — the file now has 2 lines, not 3.
+  // A line-count watermark of 3 would now point PAST the end of the 2-line file,
+  // causing the next flush to skip the newly appended event entirely (the bug).
+  pruneEvents(dir, { maxLines: 5000, maxAgeDays: 180, now: nowSec * 1000 });
+  const afterPrune = fs.readFileSync(telemetryEventsPath(dir), "utf8").split("\n").filter(Boolean);
+  assert.equal(afterPrune.length, 2, "E12: prune reduced file to 2 lines");
+
+  // Append a brand-new event AFTER the prune.
+  const EV_NEW = { ...EV, ts: nowSec, sid: "sprune", tool: "browser_scroll" };
+  appendEvent(dir, EV_NEW);
+
+  // Flush 2: must send ONLY EV_NEW (not skip it, not re-send EV_B/EV_C).
+  const f2 = mockFetch({ status: 200 });
+  const r2 = await flush(dir, {}, { fetch: f2 });
+  assert.equal(f2.calls.length, 1, "E12: flush2 posts once (EV_NEW only)");
+  const body2 = JSON.parse(f2.calls[0].opts.body);
+  assert.equal(body2.batch.length, 1, "E12: flush2 batch has exactly 1 event (EV_NEW, not already-sent events)");
+  assert.equal(body2.batch[0].tool, "browser_scroll", "E12: flush2 sends the new post-prune event");
+  assert.equal(r2.sent, 1, "E12: flush2 sent=1");
+  ok("watermark survives pruneEvents() rewrite: post-prune new events not skipped, old events not re-sent");
+} catch (e) { bad("watermark survives pruneEvents() rewrite (prune-offset regression)", e); }
 
 console.log("─────────────────────────────");
 console.log("passed:", pass); console.log("failed:", fail);
