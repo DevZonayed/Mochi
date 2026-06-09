@@ -8,6 +8,34 @@ loosely and the project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.8.0] — 2026-06-09
+
+### Added — Comment Mode v2 (sessions, navigation, dock UI)
+
+- **Sessions are first-class.** Comments are organized into named, saved
+  **sessions scoped per site (domain/port)**. **New session** starts from zero;
+  **rename** (inline), **delete** (two-tap), and **switch** between them. Your
+  existing comments are migrated automatically into one session per site.
+- **Floating navigator** (draggable) with two views:
+  - **Sessions** — filter **This site / All sites**, see each session's site +
+    comment count, ＋ new; tapping a session on the current site makes it active.
+  - **Comments** — grouped by **route**; tap a comment to jump to it.
+- **Click-to-locate navigation.** Clicking a comment scrolls to its element;
+  if it lives on a **different route or page**, Mochi navigates there first and
+  then scrolls to it (the scroll target survives the page load).
+- **Dock-style FAB.** The bubble starts/stops commenting; **hovering** it reveals
+  a macOS-dock-style, staggered column of **icon** actions (Navigator ·
+  Responsive · Copy · End) with tooltips.
+- Per-session comment numbering (each starts at **#1**) and per-session
+  **Copy brief** (includes the session name).
+
+### Notes
+- Storage moved to a `mochiComments` document (one-time migration from the old
+  format runs automatically). Cross-tab edits sync, with a flush-before-adopt
+  guard so a tab's unsaved edits aren't clobbered.
+
+---
+
 ## [0.7.3] — 2026-06-09
 
 ### Added (Comment Mode — responsive)
