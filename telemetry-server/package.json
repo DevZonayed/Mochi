@@ -1,0 +1,12 @@
+{
+  "name": "mochi-insight-telemetry-server",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Mochi Insight Zone-A telemetry ingest + owner dashboard. Self-hosted on Dokploy. Node 22 ESM, no runtime deps.",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=22" }
+}
