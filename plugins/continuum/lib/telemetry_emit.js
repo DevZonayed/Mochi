@@ -9,10 +9,14 @@
 //   Re-reads config + env, gates on isSharingEnabled. If disabled → ZERO POST.
 //
 // SENT-WATERMARK (dedup guard):
-//   flush() persists the last-attempted line offset in flush-watermark.json
-//   so that consecutive flushes only POST genuinely new events. Without this,
-//   every flush would re-POST the entire events.jsonl (pruned at 5000 lines /
-//   180 days), inflating every server-side aggregate.
+//   flush() persists the identity of the last-attempted event (ts+sid) in
+//   flush-watermark.json so that consecutive flushes only POST genuinely new
+//   events. Using an event-identity anchor (rather than a raw line offset)
+//   makes the watermark stable across pruneEvents() rewrites: even after
+//   events.jsonl is compacted, we can still find the last-sent event by its
+//   ts+sid and slice correctly. If the anchor event is no longer present after
+//   a prune (it aged out or was dropped), we fall back to sending everything
+//   (safe — server deduplicates by event identity).
 //   The watermark advances past ALL fresh events that were ATTEMPTED — including
 //   those whose POST failed. Failed batches are placed in the retry queue instead;
 //   this prevents double-sending (once as fresh + once as queued) on the next flush.
@@ -28,22 +32,53 @@ export const FETCH_TIMEOUT_MS = 4000;
 export const MAX_QUEUE_BATCHES = 50;   // cap offline queue (drop oldest beyond)
 export const MAX_BATCH_EVENTS = 500;   // cap a single POST body
 
-// readWatermark / writeWatermark: persist the last-flushed line count so
-// consecutive flushes only POST events that are NEW since the last success.
-// Returns 0 (send everything) when the file is absent or corrupt.
+// eventKey — a stable per-event identity string built from ts + sid.
+// pruneEvents() may rewrite events.jsonl dropping old events, so we cannot use
+// a raw line offset as an anchor.  ts+sid is unique enough in practice
+// (same session, same second is essentially impossible for Zone-A tool events).
+function eventKey(ev) {
+  return (ev && ev.ts != null && ev.sid != null) ? `${ev.ts}:${ev.sid}` : null;
+}
+
+// readWatermark — returns the { lastKey, flushedCount } persisted by the
+// last flush, or { lastKey: null, flushedCount: 0 } when absent/corrupt.
+// `lastKey`     — ts:sid of the last event that was included in an attempted flush.
+// `flushedCount`— how many events were in events.jsonl at the time of that flush.
+//                 Used only as a fast-path hint; correctness falls back to lastKey.
+// Legacy files that only have `flushedLines` (pre-identity watermark) are
+// treated as absent so the next flush re-sends everything (safe; server dedupes).
 function readWatermark(projectDir) {
   const p = telemetryWatermarkPath(projectDir);
-  if (!fs.existsSync(p)) return 0;
+  if (!fs.existsSync(p)) return { lastKey: null, flushedCount: 0 };
   try {
     const obj = JSON.parse(fs.readFileSync(p, "utf8"));
-    return (obj && typeof obj.flushedLines === "number") ? obj.flushedLines : 0;
-  } catch { return 0; }
+    if (obj && typeof obj.lastKey === "string") {
+      return { lastKey: obj.lastKey, flushedCount: obj.flushedCount || 0 };
+    }
+    return { lastKey: null, flushedCount: 0 };
+  } catch { return { lastKey: null, flushedCount: 0 }; }
 }
-function writeWatermark(projectDir, flushedLines) {
+
+function writeWatermark(projectDir, lastKey, flushedCount) {
   try {
     fs.mkdirSync(telemetryDir(projectDir), { recursive: true });
-    fs.writeFileSync(telemetryWatermarkPath(projectDir), JSON.stringify({ flushedLines }) + "\n");
+    fs.writeFileSync(telemetryWatermarkPath(projectDir), JSON.stringify({ lastKey, flushedCount }) + "\n");
   } catch { /* fail-open */ }
+}
+
+// resolveWatermarkOffset — find the index AFTER the last-sent event in allEvents.
+// If the event is no longer present (pruned away), returns 0 (re-send all; server
+// will dedup via event identity). If no watermark exists, also returns 0.
+function resolveWatermarkOffset(allEvents, watermark) {
+  if (!watermark.lastKey) return 0;
+  // Search from the end — the anchor event is near the tail.
+  for (let i = allEvents.length - 1; i >= 0; i--) {
+    if (eventKey(allEvents[i]) === watermark.lastKey) {
+      return i + 1; // slice from the event AFTER the anchor
+    }
+  }
+  // Anchor not found — prune removed it. Fall back to sending everything.
+  return 0;
 }
 
 // readQueue / writeQueue: unsent batches persist one-JSON-array-per-line.
@@ -91,22 +126,26 @@ export async function flush(projectDir, env = process.env, deps = {}) {
     const cfg = readConfig(projectDir);
     if (!isSharingEnabled(cfg, env)) return { sent: 0, queued: 0, skipped: true };
 
-    // Read ALL events, then slice off the already-sent prefix via the watermark.
-    // The watermark tracks how many lines were successfully flushed in the last
-    // flush() call — so only genuinely new events are POSTed, preventing the
-    // same events from being re-sent on every session_end flush (§13 dedup guard).
+    // Read ALL events, resolve the watermark to an offset that survives pruneEvents()
+    // rewrites, then slice off the already-sent prefix.
+    // Identity-keyed watermark: we search for the last-sent event by ts:sid rather
+    // than relying on a raw line count that becomes stale after prune truncates the
+    // file (quality-review finding #1).
     const allEvents = readEvents(projectDir);
     const watermark = readWatermark(projectDir);
+    const offset = resolveWatermarkOffset(allEvents, watermark);
     // Re-redact every fresh event through the whitelist serializer (defense in
     // depth; the SAME serializer used by /mochi:telemetry show).
-    const fresh = allEvents.slice(watermark).map(redactEvent).filter(Boolean);
+    const fresh = allEvents.slice(offset).map(redactEvent).filter(Boolean);
+    // Keep a reference to the last RAW event (pre-redact) so we can record its
+    // ts:sid as the new watermark anchor.
+    const lastFreshRaw = fresh.length > 0 ? allEvents[offset + fresh.length - 1] : null;
 
     const queued = readQueue(projectDir); // arrays of already-redacted events
     const iid = cfg.iid || (fresh[0] && fresh[0].iid) || (queued[0] && queued[0][0] && queued[0][0].iid) || "";
 
     // Build batches: each queued batch + one new-events batch (capped).
     const batches = [...queued];
-    const freshBatchStart = batches.length; // index of the first fresh batch
     for (let i = 0; i < fresh.length; i += MAX_BATCH_EVENTS) {
       batches.push(fresh.slice(i, i + MAX_BATCH_EVENTS));
     }
@@ -131,8 +170,11 @@ export async function flush(projectDir, env = process.env, deps = {}) {
     // retry — advancing the watermark ensures they are NOT re-included as "fresh"
     // on the next flush (which would double-send them: once fresh + once queued).
     // The queue is the sole retry path for failed batches.
-    if (fresh.length > 0) {
-      writeWatermark(projectDir, watermark + fresh.length);
+    // We record the ts:sid of the last fresh event as the new anchor so the
+    // watermark remains correct even after pruneEvents() rewrites events.jsonl.
+    if (lastFreshRaw) {
+      const newKey = eventKey(lastFreshRaw);
+      if (newKey) writeWatermark(projectDir, newKey, offset + fresh.length);
     }
     return { sent, queued: unsent.length, skipped: false };
   } catch {
